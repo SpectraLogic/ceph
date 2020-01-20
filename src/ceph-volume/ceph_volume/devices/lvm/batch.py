@@ -239,6 +239,12 @@ class Batch(object):
             help='Set (or override) the "bluestore_block_wal_size" value, in bytes'
         )
         parser.add_argument(
+            '--block-wal-auto',
+            dest='block_wal_auto',
+            action='store_true',
+            help='In auto mode, use SSDs as wal devices instead of block dbs'
+        )
+        parser.add_argument(
             '--journal-size',
             type=int,
             help='Override the "osd_journal_size" value, in megabytes'

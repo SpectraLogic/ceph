@@ -126,7 +126,7 @@ class SingleType(Strategy):
 
 class MixedType(MixedStrategy):
 
-    def __init__(self, args, data_devs, db_devs, wal_devs=[]):
+    def __init__(self, args, data_devs, db_devs=[], wal_devs=[]):
         super(MixedType, self).__init__(args, data_devs, db_devs, wal_devs)
         self.block_db_size = self.get_block_db_size()
         self.block_wal_size = self.get_block_wal_size()
@@ -140,8 +140,13 @@ class MixedType(MixedStrategy):
 
     @classmethod
     def with_auto_devices(cls, args, devices):
-        data_devs, db_devs = cls.split_devices_rotational(devices)
-        return cls(args, data_devs, db_devs)
+        db_devs=[]
+        wal_devs=[]
+        if args.block_wal_auto:
+            data_devs, wal_devs = cls.split_devices_rotational(devices)
+        else:
+            data_devs, db_devs = cls.split_devices_rotational(devices)
+        return cls(args, data_devs, db_devs, wal_devs)
 
     @staticmethod
     def type():
