@@ -63,7 +63,7 @@ pipeline {
 	// VAIL_* variables define the Vail package to 
 	// include in the VailOS image.
 	//
-	CEPH_BRANCH = master
+	CEPH_BRANCH = "nautilus-spectra"
 
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 
@@ -111,7 +111,5 @@ pipeline {
         failure {
             sendNotification(FAILURE, currentBuild.currentResult)
         }
-	cleanup {
-	}
     }
 }
