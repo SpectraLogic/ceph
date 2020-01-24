@@ -101,7 +101,6 @@ pipeline {
             when { expression { keepgoing && !buildTest } }
             steps {
                 sh "cp ${env.WORK_DIR}/release/pool/main/c/ceph/*.deb ${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
-                }
             }
         }
     }
