@@ -91,6 +91,12 @@ pipeline {
                 sh "sudo git clean -xdf"
             }
         }
+        stage('Dependencies') {
+            when { expression { keepgoing } }
+            steps {
+                sh "./install-deps.sh"
+            }
+        }
         stage('Build Ceph') {
             when { expression { keepgoing } }
             steps {
