@@ -29,6 +29,7 @@ git clean -dxf
 
 # XXX KDM debugging output
 git status
+git branch -v
 
 #
 # git describe provides a version that is
