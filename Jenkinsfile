@@ -88,7 +88,6 @@ pipeline {
             when { expression { keepgoing } }
             steps {
                 sh "sudo rm -fr ${env.WORK_DIR}/*"
-                sh "sudo git clean -xdf"
             }
         }
         stage('Dependencies') {
