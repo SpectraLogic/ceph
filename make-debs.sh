@@ -30,6 +30,7 @@ git clean -dxf
 # XXX KDM debugging output
 git status
 git branch -v
+git rev-list --all --first-parent --max-count=1
 
 #
 # git describe provides a version that is
