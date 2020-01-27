@@ -26,6 +26,10 @@ mkdir -p $releasedir
 # included in the distribution.
 #
 git clean -dxf
+
+# XXX KDM debugging output
+git status
+
 #
 # git describe provides a version that is
 # a) human readable
