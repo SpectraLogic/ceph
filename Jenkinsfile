@@ -60,7 +60,7 @@ pipeline {
                 'automatically', name: 'BUILD_PKG_ROOT')
     }
     environment {
-	CEPH_BRANCH = ${env.BRANCH_NAME}
+	CEPH_BRANCH = "${env.BRANCH_NAME}"
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 
     }
