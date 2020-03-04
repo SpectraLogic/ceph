@@ -60,11 +60,7 @@ pipeline {
                 'automatically', name: 'BUILD_PKG_ROOT')
     }
     environment {
-	// VAIL_* variables define the Vail package to 
-	// include in the VailOS image.
-	//
-	CEPH_BRANCH = "nautilus-spectra"
-
+	CEPH_BRANCH = ${env.BRANCH_NAME}
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 
     }
@@ -88,6 +84,7 @@ pipeline {
             when { expression { keepgoing } }
             steps {
                 sh "sudo rm -fr ${env.WORK_DIR}/*"
+		sh "sudo git clean -xdf"
             }
         }
         stage('Dependencies') {
