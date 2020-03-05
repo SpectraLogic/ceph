@@ -44,7 +44,7 @@ def sendNotification(color, buildStatus) {
 }
 
 pipeline {
-    agent { label "LINUX" }
+    agent { label "UPSTREAM" }
 
     // START_JENKINSFILE_PIPELINE_SPECIFIC
     // Note: see bin/jf_to_jbt
@@ -62,6 +62,7 @@ pipeline {
     environment {
 	CEPH_BRANCH = "${env.BRANCH_NAME}"
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
+	JAVA_AWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/"
 
     }
     stages {
@@ -98,7 +99,7 @@ pipeline {
         stage('Build Ceph') {
             when { expression { keepgoing } }
             steps {
-                sh "TMPDIR='${env.WORK_DIR}' ./make-debs.sh"
+                sh "TMPDIR='${env.WORK_DIR}' JAVA_AWT_INCLUDE_PATH='${env.JAVA_AWT_INCLUDE_PATH}' ./make-debs.sh"
             }
         }
         stage('Archive') {
