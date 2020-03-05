@@ -27,11 +27,6 @@ mkdir -p $releasedir
 #
 git clean -dxf
 
-# XXX KDM debugging
-git status
-git branch -v
-/bin/pwd
-
 #
 # git describe provides a version that is
 # a) human readable
