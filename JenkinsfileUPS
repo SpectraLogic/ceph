@@ -56,7 +56,7 @@ pipeline {
     // END_JENKINSFILE_PIPELINE_SPECIFIC
 
     parameters {
-        string(defaultValue: '/scratch/packages/vail/ceph', description: 'Path to archive packages, branch added ' +
+        string(defaultValue: '/scratch/packages/ceph', description: 'Path to archive packages, branch added ' +
                 'automatically', name: 'BUILD_PKG_ROOT')
     }
     environment {
@@ -64,7 +64,8 @@ pipeline {
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
 	JAWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/jawt.h"
-
+	ARTIFACTS_DIR = "${params.BUILD_IMG_ROOT}/${env.BRANCH_NAME}"
+	ARTIFACTS = "${env.ARTIFACTS_DIR}/ceph_deb_repo.${env.BUILD_NUMBER}.tgz"
     }
     stages {
         stage('CheckCause') {
@@ -100,14 +101,17 @@ pipeline {
         stage('Build Ceph') {
             when { expression { keepgoing } }
             steps {
-                sh "TMPDIR='${env.WORK_DIR}' JAVA_HOME='${env.JAVA_HOME}' " +
-	           "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' ./make-debs.sh"
+                sh "TMPDIR='${env.WORK_DIR}/tmp' JAVA_HOME='${env.JAVA_HOME}' " +
+	           "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' " +
+                   "./make-debs.sh '${env.WORK_DIR}'"
             }
         }
         stage('Archive') {
             when { expression { keepgoing && !buildTest } }
             steps {
-                sh "cp ${env.WORK_DIR}/release/pool/main/c/ceph/*.deb ${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
+                sh "mkdir -pm 777 ${env.ARTIFACTS_DIR}/ || true"
+		sh "sudo tar -czvf ${env.ARTIFACTS} -C ${env.WORK_DIR}/Ubuntu bionic conf db dists pool"
+		sh "chmod 666 ${env.ARTIFACTS}"
             }
         }
     }
