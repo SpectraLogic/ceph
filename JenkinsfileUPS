@@ -62,7 +62,8 @@ pipeline {
     environment {
 	CEPH_BRANCH = "${env.BRANCH_NAME}"
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
-	JAVA_AWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/"
+	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
+	JAWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/jawt.h"
 
     }
     stages {
@@ -99,7 +100,8 @@ pipeline {
         stage('Build Ceph') {
             when { expression { keepgoing } }
             steps {
-                sh "TMPDIR='${env.WORK_DIR}' JAVA_AWT_INCLUDE_PATH='${env.JAVA_AWT_INCLUDE_PATH}' ./make-debs.sh"
+                sh "TMPDIR='${env.WORK_DIR}' JAVA_HOME='${env.JAVA_HOME}' " +
+	           "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' ./make-debs.sh"
             }
         }
         stage('Archive') {
