@@ -88,8 +88,8 @@ pipeline {
             steps {
                 sh "sudo rm -fr ${env.WORK_DIR}/*"
 		sh "sudo git clean -xdf"
-                sh "sudo mkdir -p ${env.WORK_DIR}"
-                sh "sudo chmod 777 ${env.WORK_DIR}"
+                sh "sudo mkdir -p ${env.WORK_DIR}/tmp"
+                sh "sudo chmod -R 777 ${env.WORK_DIR}"
             }
         }
         stage('Dependencies') {
