@@ -64,8 +64,9 @@ pipeline {
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
 	JAWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/jawt.h"
-	ARTIFACTS_DIR = "${params.BUILD_IMG_ROOT}/${env.BRANCH_NAME}"
-	ARTIFACTS = "${env.ARTIFACTS_DIR}/ceph_deb_repo.${env.BUILD_NUMBER}.tgz"
+	ARTIFACTS = "bionic conf db dists pool"
+	ARTIFACTS_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
+	ARTIFACTS_TAR = "${env.ARTIFACTS_DIR}/ceph_deb_repo.${env.BUILD_NUMBER}.tgz"
     }
     stages {
         stage('CheckCause') {
@@ -109,9 +110,10 @@ pipeline {
         stage('Archive') {
             when { expression { keepgoing && !buildTest } }
             steps {
-                sh "mkdir -pm 777 ${env.ARTIFACTS_DIR}/ || true"
-		sh "sudo tar -czvf ${env.ARTIFACTS} -C ${env.WORK_DIR}/Ubuntu bionic conf db dists pool"
-		sh "chmod 666 ${env.ARTIFACTS}"
+                sh "sudo mkdir -pm 777 ${env.ARTIFACTS_DIR}/ || true"
+		sh "sudo tar -czvf ${env.ARTIFACTS_TAR} -C ${env.WORK_DIR}/Ubuntu ${env.ARTIFACTS}"
+		sh "sudo chmod 666 ${env.ARTIFACTS_TAR}"
+                sh "sudo rm -fr ${env.WORK_DIR}/*"
             }
         }
     }
