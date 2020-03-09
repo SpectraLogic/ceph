@@ -84,6 +84,7 @@ pipeline {
                 }
             }
         }
+
         stage('Clean') {
             when { expression { keepgoing } }
             steps {
@@ -93,12 +94,14 @@ pipeline {
                 sh "sudo chmod -R 777 ${env.WORK_DIR}"
             }
         }
+
         stage('Dependencies') {
             when { expression { keepgoing } }
             steps {
                 sh "./install-deps.sh"
             }
         }
+
         stage('Build Ceph') {
             when { expression { keepgoing } }
             steps {
@@ -107,6 +110,7 @@ pipeline {
                    "./make-debs.sh '${env.WORK_DIR}'"
             }
         }
+
         stage('Archive') {
             when { expression { keepgoing && !buildTest } }
             steps {
@@ -116,7 +120,15 @@ pipeline {
                 sh "sudo rm -fr ${env.WORK_DIR}/*"
             }
         }
+
+        stage('PostClean') {
+            when { expression { keepgoing } }
+            steps {
+                sh "sudo rm -fr ${env.WORK_DIR}/*"
+            }
+        }
     }
+
     post {
         success {
             notifyStatusChange(currentBuild.currentResult)
