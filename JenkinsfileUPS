@@ -60,13 +60,18 @@ pipeline {
                 'automatically', name: 'BUILD_PKG_ROOT')
     }
     environment {
-	CEPH_BRANCH = "${env.BRANCH_NAME}"
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
 	JAWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/jawt.h"
-	ARTIFACTS = "bionic conf db dists pool"
-	ARTIFACTS_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
-	ARTIFACTS_TAR = "${env.ARTIFACTS_DIR}/ceph_deb_repo.${env.BUILD_NUMBER}.tgz"
+
+	ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
+	ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
+	ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/ceph_deb_repo.${env.BUILD_NUMBER}.tgz"
+
+	SPECTRA_INFO = "spectra.build"
+	SPECTRA_INFO_PATH = "${env.ARTIFACTS_SRC_DIR}/${env.SPECTRA_INFO}"
+
+	ARTIFACTS_LIST = "bionic conf db dists pool ${env.SPECTRA_INFO}"
     }
     stages {
         stage('CheckCause') {
@@ -111,13 +116,19 @@ pipeline {
             }
         }
 
+	stage('Build Info') {
+            when { expression { keepgoing } }
+            steps {
+                sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '{env.BUILD_NUMBER}'"
+            }
+        }
+
         stage('Archive') {
             when { expression { keepgoing && !buildTest } }
             steps {
-                sh "sudo mkdir -pm 777 ${env.ARTIFACTS_DIR}/ || true"
-		sh "sudo tar -czvf ${env.ARTIFACTS_TAR} -C ${env.WORK_DIR}/Ubuntu ${env.ARTIFACTS}"
+                sh "sudo mkdir -pm 777 ${env.ARTIFACTS_DST_DIR}/ || true"
+		sh "sudo tar -czvf ${env.ARTIFACTS_TAR} -C ${env.ARTIFACTS_SRC_DIR} ${env.ARTIFACTS_LIST}"
 		sh "sudo chmod 666 ${env.ARTIFACTS_TAR}"
-                sh "sudo rm -fr ${env.WORK_DIR}/*"
             }
         }
 
