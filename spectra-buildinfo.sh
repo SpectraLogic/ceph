@@ -1,9 +1,14 @@
 #!/bin/bash
 #
+# Generate some build information that my be useful
+#
 PROG=$(basename $0)
-OUTPUT="${1:-none}"
-BLDNUM="${2:-0}"
+OUTPUT="${1:-none}"	# Output file is assumed to be in the artifacts directory
+BLDNUM="${2:-0}"	# Jenkins build number
+shift 2
+ARTIFACTS="$@"		# Files and directories that are our "artifacts" relative to dirname $OUTPUT
 PFMT="%-15s %s\n"
+
 
 error()
 {
@@ -26,6 +31,6 @@ printf "$PFMT" "BUILD_NUMBER:" "$BLDNUM" >> $file
 printf "$PFMT" "GIT_BRANCH:" "$GIT_BRANCH" >> $file
 printf "$PFMT" "GIT_COMMIT:" "$GIT_COMMIT" >> $file
 printf "$PFMT" "FILES:" >> $file
-find * ! -name $file >> $file
+find $ARTIFACTS >> $file
 
 exit 0
