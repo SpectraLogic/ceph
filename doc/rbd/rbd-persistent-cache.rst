@@ -15,13 +15,15 @@ image data from the RADOS cluster. If we have a local cache of the parent
 image, this will help to speed up the read process on one host, as well as
 to save the client to cluster network traffic.
 RBD shared read-only parent image cache requires explicitly enabling in
-``ceph.conf``. The ``ceph-immmutable-object-cache`` daemon is responsible for
+``ceph.conf``. The ``ceph-immutable-object-cache`` daemon is responsible for
 caching the parent content on the local disk, and future reads on that data
 will be serviced from the local cache.
 
 .. note:: RBD shared read-only parent image cache requires the Ceph Nautilus release or later.
 
-.. ditaa::  +--------------------------------------------------------+
+.. ditaa::
+
+            +--------------------------------------------------------+
             |                         QEMU                           |
             +--------------------------------------------------------+
             |                librbd (cloned images)                  |
@@ -36,10 +38,10 @@ Enable RBD Shared Read-only Parent Image Cache
 ----------------------------------------------
 
 To enable RBD shared read-only parent image cache, the following Ceph settings
-need to added in the ``[client]`` `section`_ of your ``ceph.conf`` file.
+need to added in the ``[client]`` `section`_ of your ``ceph.conf`` file::
 
-``rbd parent cache enabled = true``
-
+        rbd parent cache enabled = true
+        rbd plugins = parent_cache
 
 Immutable Object Cache Daemon
 =============================

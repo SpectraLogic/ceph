@@ -95,8 +95,9 @@ public:
   Context *on_finish = nullptr;
 
   static EnableRequest *create(MockOperationImageCtx *image_ctx,
-                               mirror_image_mode_t mirror_image_mode,
-                               Context *on_finish) {
+                               cls::rbd::MirrorImageMode mirror_image_mode,
+                               const std::string& non_primary_global_image_id,
+                               bool image_clean, Context *on_finish) {
     ceph_assert(s_instance != nullptr);
     s_instance->on_finish = on_finish;
     return s_instance;
@@ -215,12 +216,12 @@ public:
   }
 
   void expect_block_writes(MockOperationImageCtx &mock_image_ctx) {
-    EXPECT_CALL(*mock_image_ctx.io_work_queue, block_writes(_))
+    EXPECT_CALL(*mock_image_ctx.io_image_dispatcher, block_writes(_))
       .WillOnce(CompleteContext(0, mock_image_ctx.image_ctx->op_work_queue));
   }
 
   void expect_unblock_writes(MockOperationImageCtx &mock_image_ctx) {
-    EXPECT_CALL(*mock_image_ctx.io_work_queue, unblock_writes()).Times(1);
+    EXPECT_CALL(*mock_image_ctx.io_image_dispatcher, unblock_writes()).Times(1);
   }
 
   void expect_verify_lock_ownership(MockOperationImageCtx &mock_image_ctx) {

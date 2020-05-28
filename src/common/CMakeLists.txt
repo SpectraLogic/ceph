@@ -7,13 +7,20 @@ add_library(common_texttable_obj OBJECT
 add_library(common_prioritycache_obj OBJECT
   PriorityCache.cc)
 
+if(WIN32)
+  add_library(dlfcn_win32 STATIC dlfcn_win32.cc)
+endif()
+
 set(common_srcs
   AsyncOpTracker.cc
   BackTrace.cc
   ConfUtils.cc
   Cycles.cc
+  CDC.cc
   DecayCounter.cc
+  FastCDC.cc
   Finisher.cc
+  FixedCDC.cc
   Formatter.cc
   Graylog.cc
   HTMLFormatter.cc
@@ -77,13 +84,13 @@ set(common_srcs
   mime.c
   mutex_debug.cc
   numa.cc
+  openssl_opts_handler.cc
   options.cc
   page.cc
   perf_counters.cc
   perf_counters_collection.cc
   perf_histogram.cc
   pick_address.cc
-  rabin.cc
   random_string.cc
   reverse.c
   run_cmd.cc
@@ -96,6 +103,7 @@ set(common_srcs
   strtol.cc
   types.cc
   url_escape.cc
+  pretty_binary.cc
   utf8.c
   util.cc
   version.cc)
@@ -126,6 +134,10 @@ endif()
 
 add_library(common-common-objs OBJECT
   ${common_srcs})
+# Let's not rely on the default system headers and point Cmake to the
+# retrieved OpenSSL location. This is especially important when cross
+# compiling (e.g. targeting Windows).
+target_include_directories(common-common-objs PRIVATE ${OPENSSL_INCLUDE_DIR})
 # for options.cc
 target_compile_definitions(common-common-objs PRIVATE
   "CEPH_LIBDIR=\"${CMAKE_INSTALL_FULL_LIBDIR}\""

@@ -38,7 +38,6 @@
 #include <boost/intrusive/set.hpp>
 #include <boost/optional.hpp>
 
-#include "include/ceph_assert.h"	// boost clobbers this
 #include "include/intarith.h"
 #include "include/int_types.h"
 #include "include/scope_guard.h"
@@ -47,6 +46,7 @@
 #include "byteorder.h"
 
 #include "common/convenience.h"
+#include "common/error_code.h"
 
 template<typename T, typename=void>
 struct denc_traits {
@@ -124,7 +124,7 @@ private:
     auto close_fd = make_scope_guard([fd] { ::close(fd); });
     if (auto bl_delta = appender.bl.length() - bl_offset; bl_delta > 0) {
       ceph::bufferlist dump_bl;
-      appender.bl.copy(bl_offset + space_offset, bl_delta - space_offset, dump_bl);
+      appender.bl.begin(bl_offset + space_offset).copy(bl_delta - space_offset, dump_bl);
       const size_t space_len = space_size();
       dump_bl.append(appender.get_pos() - space_len, space_len);
       dump_bl.write_fd(fd);
@@ -1536,6 +1536,29 @@ struct denc_traits<std::nullopt_t> {
     }									\
   };
 
+// ----------------------------------------------------------------------
+// encoded_sizeof_wrapper
+
+namespace ceph {
+
+template <typename T, typename traits=denc_traits<T>>
+constexpr std::enable_if_t<traits::supported && traits::bounded, size_t>
+encoded_sizeof_bounded() {
+  size_t p = 0;
+  traits::bound_encode(T(), p);
+  return p;
+}
+
+template <typename T, typename traits=denc_traits<T>>
+std::enable_if_t<traits::supported, size_t>
+encoded_sizeof(const T &t) {
+  size_t p = 0;
+  traits::bound_encode(t, p);
+  return p;
+}
+
+} // namespace ceph
+
 
 // ----------------------------------------------------------------------
 // encode/decode wrappers
@@ -1590,7 +1613,7 @@ inline std::enable_if_t<traits::supported && !traits::need_contiguous> decode(
     t.copy_shallow(remaining, tmp);
     auto cp = std::cbegin(tmp);
     traits::decode(o, cp);
-    p.advance(cp.get_offset());
+    p += cp.get_offset();
   }
 }
 
@@ -1611,7 +1634,7 @@ inline std::enable_if_t<traits::supported && traits::need_contiguous> decode(
   t.copy_shallow(p.get_bl().length() - p.get_off(), tmp);
   auto cp = std::cbegin(tmp);
   traits::decode(o, cp);
-  p.advance(cp.get_offset());
+  p += cp.get_offset();
 }
 
 // nohead variants
@@ -1650,7 +1673,7 @@ inline std::enable_if_t<traits::supported && !traits::featured> decode_nohead(
     }
     auto cp = std::cbegin(tmp);
     traits::decode_nohead(num, o, cp);
-    p.advance(cp.get_offset());
+    p += cp.get_offset();
   } else {
     traits::decode_nohead(num, o, p);
   }
@@ -1713,9 +1736,11 @@ inline std::enable_if_t<traits::supported && !traits::featured> decode_nohead(
 			   uint32_t *struct_len) {			\
     const char *pos = p.get_pos();					\
     char *end = *start_pos + *struct_len;				\
-    ceph_assert(pos <= end);							\
+    if (pos > end) {							\
+      throw ::ceph::buffer::malformed_input(__PRETTY_FUNCTION__);	\
+    }									\
     if (pos < end) {							\
-      p.advance(end - pos);						\
+      p += end - pos;							\
     }									\
   }
 

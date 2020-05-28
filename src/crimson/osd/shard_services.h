@@ -6,12 +6,14 @@
 #include <boost/intrusive_ptr.hpp>
 #include <seastar/core/future.hh>
 
+#include "include/common_fwd.h"
 #include "osd_operation.h"
 #include "msg/MessageRef.h"
 #include "crimson/os/futurized_collection.h"
 #include "osd/PeeringState.h"
 #include "crimson/osd/osdmap_service.h"
 #include "crimson/osd/object_context.h"
+#include "common/AsyncReserver.h"
 
 namespace crimson::net {
   class Messenger;
@@ -29,7 +31,6 @@ namespace crimson::os {
   class FuturizedStore;
 }
 
-class PerfCounters;
 class OSDMap;
 class PeeringCtx;
 class BufferedRecoveryMessages;
@@ -39,7 +40,7 @@ namespace crimson::osd {
 /**
  * Represents services available to each PG
  */
-class ShardServices {
+class ShardServices : public md_config_obs_t {
   using cached_map_t = boost::local_shared_ptr<const OSDMap>;
   OSDMapService &osdmap_service;
   crimson::net::Messenger &cluster_msgr;
@@ -48,11 +49,14 @@ class ShardServices {
   crimson::mgr::Client &mgrc;
   crimson::os::FuturizedStore &store;
 
-  CephContext cct;
+  crimson::common::CephContext cct;
 
   PerfCounters *perf = nullptr;
   PerfCounters *recoverystate_perf = nullptr;
 
+  const char** get_tracked_conf_keys() const final;
+  void handle_conf_change(const ConfigProxy& conf,
+                          const std::set <std::string> &changed) final;
 public:
   ShardServices(
     OSDMapService &osdmap_service,
@@ -71,7 +75,7 @@ public:
     return store;
   }
 
-  CephContext *get_cct() {
+  crimson::common::CephContext *get_cct() {
     return &cct;
   }
 
@@ -80,8 +84,9 @@ public:
     return osdmap_service;
   }
 
-  // Op Tracking
+  // Op Management
   OperationRegistry registry;
+  OperationThrottler throttler;
 
   template <typename T, typename... Args>
   auto start_operation(Args&&... args) {
@@ -150,6 +155,16 @@ public:
   seastar::future<> send_pg_created();
   void prune_pg_created();
 
+  unsigned get_pg_num() const {
+    return num_pgs;
+  }
+  void inc_pg_num() {
+    ++num_pgs;
+  }
+  void dec_pg_num() {
+    --num_pgs;
+  }
+
   seastar::future<> osdmap_subscribe(version_t epoch, bool force_request);
 
   // Time state
@@ -161,6 +176,19 @@ public:
   std::map<int, HeartbeatStampsRef> heartbeat_stamps;
 
   crimson::osd::ObjectContextRegistry obc_registry;
+
+  // Async Reservers
+private:
+  unsigned num_pgs = 0;
+
+  struct DirectFinisher {
+    void queue(Context *c) {
+      c->complete(0);
+    }
+  } finisher;
+public:
+  AsyncReserver<spg_t, DirectFinisher> local_reserver;
+  AsyncReserver<spg_t, DirectFinisher> remote_reserver;
 };
 
 }

@@ -526,6 +526,7 @@ union ceph_mds_request_args_legacy {
 
 #define CEPH_MDS_FLAG_REPLAY        1  /* this is a replayed op */
 #define CEPH_MDS_FLAG_WANT_DENTRY   2  /* want dentry in reply */
+#define CEPH_MDS_FLAG_ASYNC         4  /* request is async */
 
 struct ceph_mds_request_head_legacy {
 	__le64 oldest_client_tid;
@@ -881,20 +882,19 @@ struct ceph_mds_caps_head {
 	__le64 xattr_version;
 } __attribute__ ((packed));
 
-struct ceph_mds_caps_body_legacy {
-	union {
-		/* all except export */
-		struct {
-			/* filelock */
-			__le64 size, max_size, truncate_size;
-			__le32 truncate_seq;
-			struct ceph_timespec mtime, atime, ctime;
-			struct ceph_file_layout layout;
-			__le32 time_warp_seq;
-		} __attribute__ ((packed));
-		/* export message */
-		struct ceph_mds_cap_peer peer;
-	} __attribute__ ((packed));
+struct ceph_mds_caps_non_export_body {
+    /* all except export */
+    /* filelock */
+    __le64 size, max_size, truncate_size;
+    __le32 truncate_seq;
+    struct ceph_timespec mtime, atime, ctime;
+    struct ceph_file_layout layout;
+    __le32 time_warp_seq;
+} __attribute__ ((packed));
+
+struct ceph_mds_caps_export_body {
+    /* export message */
+    struct ceph_mds_cap_peer peer;
 } __attribute__ ((packed));
 
 /* cap release msg head */

@@ -34,14 +34,17 @@
 #include "librbd/Utils.h"
 #include "librbd/api/Config.h"
 #include "librbd/api/Image.h"
+#include "librbd/api/Io.h"
 #include "librbd/exclusive_lock/AutomaticPolicy.h"
 #include "librbd/exclusive_lock/StandardPolicy.h"
+#include "librbd/deep_copy/MetadataCopyRequest.h"
 #include "librbd/image/CloneRequest.h"
 #include "librbd/image/CreateRequest.h"
+#include "librbd/image/GetMetadataRequest.h"
+#include "librbd/image/Types.h"
 #include "librbd/io/AioCompletion.h"
 #include "librbd/io/ImageRequest.h"
-#include "librbd/io/ImageRequestWQ.h"
-#include "librbd/io/ObjectDispatcher.h"
+#include "librbd/io/ObjectDispatcherInterface.h"
 #include "librbd/io/ObjectRequest.h"
 #include "librbd/io/ReadResult.h"
 #include "librbd/journal/Types.h"
@@ -308,6 +311,7 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
     {RBD_IMAGE_OPTION_DATA_POOL, STR},
     {RBD_IMAGE_OPTION_FLATTEN, UINT64},
     {RBD_IMAGE_OPTION_CLONE_FORMAT, UINT64},
+    {RBD_IMAGE_OPTION_MIRROR_IMAGE_MODE, UINT64},
   };
 
   std::string image_option_name(int optname) {
@@ -338,6 +342,8 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
       return "flatten";
     case RBD_IMAGE_OPTION_CLONE_FORMAT:
       return "clone_format";
+    case RBD_IMAGE_OPTION_MIRROR_IMAGE_MODE:
+      return "mirror_image_mode";
     default:
       return "unknown (" + stringify(optname) + ")";
     }
@@ -685,10 +691,20 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
       ConfigProxy config{cct->_conf};
       api::Config<>::apply_pool_overrides(io_ctx, &config);
 
+      uint32_t create_flags = 0U;
+      uint64_t mirror_image_mode = RBD_MIRROR_IMAGE_MODE_JOURNAL;
+      if (skip_mirror_enable) {
+        create_flags = image::CREATE_FLAG_SKIP_MIRROR_ENABLE;
+      } else if (opts.get(RBD_IMAGE_OPTION_MIRROR_IMAGE_MODE,
+                          &mirror_image_mode) == 0) {
+        create_flags = image::CREATE_FLAG_FORCE_MIRROR_ENABLE;
+      }
+
       C_SaferCond cond;
       image::CreateRequest<> *req = image::CreateRequest<>::create(
-        config, io_ctx, image_name, id, size, opts, non_primary_global_image_id,
-        primary_mirror_uuid, skip_mirror_enable, op_work_queue, &cond);
+        config, io_ctx, image_name, id, size, opts, create_flags,
+        static_cast<cls::rbd::MirrorImageMode>(mirror_image_mode),
+        non_primary_global_image_id, primary_mirror_uuid, op_work_queue, &cond);
       req->send();
 
       r = cond.wait();
@@ -780,9 +796,10 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
 
     C_SaferCond cond;
     auto *req = image::CloneRequest<>::create(
-      config, p_ioctx, parent_id, p_snap_name, CEPH_NOSNAP, c_ioctx, c_name,
-      clone_id, c_opts, non_primary_global_image_id, primary_mirror_uuid,
-      op_work_queue, &cond);
+      config, p_ioctx, parent_id, p_snap_name,
+      {cls::rbd::UserSnapshotNamespace{}}, CEPH_NOSNAP, c_ioctx, c_name,
+      clone_id, c_opts, cls::rbd::MIRROR_IMAGE_MODE_JOURNAL,
+      non_primary_global_image_id, primary_mirror_uuid, op_work_queue, &cond);
     req->send();
 
     r = cond.wait();
@@ -1106,7 +1123,7 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
     uint64_t features = src->features;
     uint64_t src_size = src->get_image_size(src->snap_id);
     src->image_lock.unlock_shared();
-    uint64_t format = src->old_format ? 1 : 2;
+    uint64_t format = 2;
     if (opts.get(RBD_IMAGE_OPTION_FORMAT, &format) != 0) {
       opts.set(RBD_IMAGE_OPTION_FORMAT, format);
     }
@@ -1221,11 +1238,10 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
 	  auto comp = io::AioCompletion::create(ctx);
 
 	  // coordinate through AIO WQ to ensure lock is acquired if needed
-	  m_dest->io_work_queue->aio_write(comp, m_offset + write_offset,
-					   write_length,
-					   std::move(*write_bl),
-					   LIBRADOS_OP_FLAG_FADVISE_DONTNEED,
-					   std::move(read_trace));
+	  api::Io<>::aio_write(*m_dest, comp, m_offset + write_offset,
+                               write_length, std::move(*write_bl),
+                               LIBRADOS_OP_FLAG_FADVISE_DONTNEED,
+                               std::move(read_trace));
 	  write_offset = offset;
 	  write_length = 0;
 	}
@@ -1261,29 +1277,16 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
 		 << dest_size << dendl;
       return -EINVAL;
     }
-    int r;
-    const uint32_t MAX_KEYS = 64;
-    map<string, bufferlist> pairs;
-    std::string last_key = "";
-    bool more_results = true;
 
-    while (more_results) {
-      r = cls_client::metadata_list(&src->md_ctx, src->header_oid, last_key, 0, &pairs);
-      if (r < 0 && r != -EOPNOTSUPP && r != -EIO) {
-        lderr(cct) << "couldn't list metadata: " << cpp_strerror(r) << dendl;
-        return r;
-      } else if (r == 0 && !pairs.empty()) {
-        r = cls_client::metadata_set(&dest->md_ctx, dest->header_oid, pairs);
-        if (r < 0) {
-          lderr(cct) << "couldn't set metadata: " << cpp_strerror(r) << dendl;
-          return r;
-        }
+    C_SaferCond ctx;
+    auto req = deep_copy::MetadataCopyRequest<>::create(
+      src, dest, &ctx);
+    req->send();
 
-        last_key = pairs.rbegin()->first;
-      }
-
-      more_results = (pairs.size() == MAX_KEYS);
-      pairs.clear();
+    int r = ctx.wait();
+    if (r < 0) {
+      lderr(cct) << "failed to copy metadata: " << cpp_strerror(r) << dendl;
+      return r;
     }
 
     ZTracer::Trace trace;
@@ -1646,7 +1649,12 @@ int validate_pool(IoCtx &io_ctx, CephContext *cct) {
       return r;
     }
 
-    return cls_client::metadata_list(&ictx->md_ctx, ictx->header_oid, start, max, pairs);
+    C_SaferCond ctx;
+    auto req = image::GetMetadataRequest<>::create(
+      ictx->md_ctx, ictx->header_oid, false, "", start, max, pairs, &ctx);
+    req->send();
+
+    return ctx.wait();
   }
 
   int list_watchers(ImageCtx *ictx,

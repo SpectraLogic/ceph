@@ -20,6 +20,7 @@
 #include "common/snap_types.h"
 #include "common/zipkin_trace.h"
 
+#include "include/common_fwd.h"
 #include "include/buffer_fwd.h"
 #include "include/rbd/librbd.hpp"
 #include "include/rbd_types.h"
@@ -34,10 +35,8 @@
 #include <boost/lockfree/policies.hpp>
 #include <boost/lockfree/queue.hpp>
 
-class CephContext;
 class ContextWQ;
 class Finisher;
-class PerfCounters;
 class ThreadPool;
 class SafeTimer;
 
@@ -50,6 +49,7 @@ namespace librbd {
   class LibrbdAdminSocketHook;
   template <typename> class ObjectMap;
   template <typename> class Operations;
+  template <typename> class PluginRegistry;
 
   namespace cache {
   template <typename> class ImageCache;
@@ -59,8 +59,8 @@ namespace librbd {
   class AioCompletion;
   class AsyncOperation;
   template <typename> class CopyupRequest;
-  template <typename> class ImageRequestWQ;
-  template <typename> class ObjectDispatcher;
+  struct ImageDispatcherInterface;
+  struct ObjectDispatcherInterface;
   }
   namespace journal { struct Policy; }
 
@@ -69,6 +69,17 @@ namespace librbd {
   }
 
   struct ImageCtx {
+    typedef std::pair<cls::rbd::SnapshotNamespace, std::string> SnapKey;
+    struct SnapKeyComparator {
+      inline bool operator()(const SnapKey& lhs, const SnapKey& rhs) const {
+        // only compare by namespace type and name
+        if (lhs.first.which() != rhs.first.which()) {
+          return lhs.first.which() < rhs.first.which();
+        }
+        return lhs.second < rhs.second;
+      }
+    };
+
     static const string METADATA_CONF_PREFIX;
 
     CephContext *cct;
@@ -81,12 +92,14 @@ namespace librbd {
     std::vector<librados::snap_t> snaps; // this mirrors snapc.snaps, but is in
                                         // a format librados can understand
     std::map<librados::snap_t, SnapInfo> snap_info;
-    std::map<std::pair<cls::rbd::SnapshotNamespace, std::string>, librados::snap_t> snap_ids;
+    std::map<SnapKey, librados::snap_t, SnapKeyComparator> snap_ids;
     uint64_t open_snap_id = CEPH_NOSNAP;
     uint64_t snap_id;
     bool snap_exists; // false if our snap_id was deleted
     // whether the image was opened read-only. cannot be changed after opening
     bool read_only;
+    uint32_t read_only_flags = 0U;
+    uint32_t read_only_mask = ~0U;
 
     std::map<rados::cls::lock::locker_id_t,
 	     rados::cls::lock::locker_info_t> lockers;
@@ -168,10 +181,12 @@ namespace librbd {
 
     xlist<operation::ResizeRequest<ImageCtx>*> resize_reqs;
 
-    io::ImageRequestWQ<ImageCtx> *io_work_queue;
-    io::ObjectDispatcher<ImageCtx> *io_object_dispatcher = nullptr;
+    io::ImageDispatcherInterface *io_image_dispatcher = nullptr;
+    io::ObjectDispatcherInterface *io_object_dispatcher = nullptr;
 
     ContextWQ *op_work_queue;
+
+    PluginRegistry<ImageCtx>* plugin_registry;
 
     typedef boost::lockfree::queue<
       io::AioCompletion*,
@@ -195,6 +210,8 @@ namespace librbd {
     uint64_t readahead_disable_after_bytes;
     bool clone_copy_on_read;
     bool enable_alloc_hint;
+    uint32_t alloc_hint_flags = 0U;
+    uint32_t read_flags = 0U;
     uint32_t discard_granularity_bytes = 0;
     bool blkin_trace_all;
     uint64_t mirroring_replay_delay;

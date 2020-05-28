@@ -5,13 +5,14 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { I18n } from '@ngx-translate/i18n-polyfill';
 import * as _ from 'lodash';
 
-import { AsyncSubject, forkJoin, Observable } from 'rxjs';
-import { switchMap } from 'rxjs/operators';
+import { forkJoin, Observable, ReplaySubject } from 'rxjs';
+import { first, switchMap } from 'rxjs/operators';
 
 import { PoolService } from '../../../shared/api/pool.service';
 import { RbdService } from '../../../shared/api/rbd.service';
 import { ActionLabelsI18n } from '../../../shared/constants/app.constants';
 import { Icons } from '../../../shared/enum/icons.enum';
+import { CdForm } from '../../../shared/forms/cd-form';
 import { CdFormGroup } from '../../../shared/forms/cd-form-group';
 import {
   RbdConfigurationEntry,
@@ -24,6 +25,7 @@ import { DimlessBinaryPipe } from '../../../shared/pipes/dimless-binary.pipe';
 import { AuthStorageService } from '../../../shared/services/auth-storage.service';
 import { FormatterService } from '../../../shared/services/formatter.service';
 import { TaskWrapperService } from '../../../shared/services/task-wrapper.service';
+import { Pool } from '../../pool/pool';
 import { RbdImageFeature } from './rbd-feature.interface';
 import { RbdFormCloneRequestModel } from './rbd-form-clone-request.model';
 import { RbdFormCopyRequestModel } from './rbd-form-copy-request.model';
@@ -37,7 +39,7 @@ import { RbdFormResponseModel } from './rbd-form-response.model';
   templateUrl: './rbd-form.component.html',
   styleUrls: ['./rbd-form.component.scss']
 })
-export class RbdFormComponent implements OnInit {
+export class RbdFormComponent extends CdForm implements OnInit {
   poolPermission: Permission;
   rbdForm: CdFormGroup;
   getDirtyConfigurationValues: (
@@ -47,8 +49,8 @@ export class RbdFormComponent implements OnInit {
 
   namespaces: Array<string> = [];
   namespacesByPoolCache = {};
-  pools: Array<string> = null;
-  allPools: Array<string> = null;
+  pools: Array<Pool> = null;
+  allPools: Array<Pool> = null;
   dataPools: Array<string> = null;
   allDataPools: Array<string> = null;
   features: { [key: string]: RbdImageFeature };
@@ -88,7 +90,7 @@ export class RbdFormComponent implements OnInit {
   ];
   action: string;
   resource: string;
-  private rbdImage = new AsyncSubject();
+  private rbdImage = new ReplaySubject(1);
 
   icons = Icons;
 
@@ -104,6 +106,7 @@ export class RbdFormComponent implements OnInit {
     public actionLabels: ActionLabelsI18n,
     public router: Router
   ) {
+    super();
     this.poolPermission = this.authStorageService.getPermissions().pool;
     this.resource = this.i18n('RBD');
     this.features = {
@@ -174,7 +177,7 @@ export class RbdFormComponent implements OnInit {
         }),
         obj_size: new FormControl(this.defaultObjectSize),
         features: new CdFormGroup(
-          this.featuresList.reduce((acc, e) => {
+          this.featuresList.reduce((acc: object, e) => {
             acc[e.key] = new FormControl({ value: false, disabled: !!e.initDisabled });
             return acc;
           }, {})
@@ -260,7 +263,7 @@ export class RbdFormComponent implements OnInit {
     forkJoin(promisses).subscribe((data: object) => {
       // poolService.list
       if (data[Promisse.PoolServiceList]) {
-        const pools = [];
+        const pools: Pool[] = [];
         const dataPools = [];
         for (const pool of data[Promisse.PoolServiceList]) {
           if (this.rbdService.isRBDPool(pool)) {
@@ -280,7 +283,7 @@ export class RbdFormComponent implements OnInit {
         this.dataPools = dataPools;
         this.allDataPools = dataPools;
         if (this.pools.length === 1) {
-          const poolName = this.pools[0]['pool_name'];
+          const poolName = this.pools[0].pool_name;
           this.rbdForm.get('pool').setValue(poolName);
           this.onPoolChange(poolName);
         }
@@ -292,6 +295,8 @@ export class RbdFormComponent implements OnInit {
         this.setResponse(resp, this.snapName);
         this.rbdImage.next(resp);
       }
+
+      this.loadingReady();
     });
 
     _.each(this.features, (feature) => {
@@ -302,7 +307,7 @@ export class RbdFormComponent implements OnInit {
     });
   }
 
-  onPoolChange(selectedPoolName) {
+  onPoolChange(selectedPoolName: string) {
     const newDataPools = this.allDataPools
       ? this.allDataPools.filter((dataPool: any) => {
           return dataPool.pool_name !== selectedPoolName;
@@ -332,8 +337,8 @@ export class RbdFormComponent implements OnInit {
     }
   }
 
-  onDataPoolChange(selectedDataPoolName) {
-    const newPools = this.allPools.filter((pool: any) => {
+  onDataPoolChange(selectedDataPoolName: string) {
+    const newPools = this.allPools.filter((pool: Pool) => {
       return pool.pool_name !== selectedDataPoolName;
     });
     if (this.rbdForm.getValue('pool') === selectedDataPoolName) {
@@ -398,7 +403,7 @@ export class RbdFormComponent implements OnInit {
     return _.filter(this.features, (f) => f.requires === featureKey) || [];
   }
 
-  deepBoxCheck(key, checked) {
+  deepBoxCheck(key: string, checked: boolean) {
     const childFeatures = this.getDependendChildFeatures(key);
     childFeatures.forEach((feature) => {
       const featureControl = this.rbdForm.get(feature.key);
@@ -424,7 +429,7 @@ export class RbdFormComponent implements OnInit {
     });
   }
 
-  interlockCheck(key, checked) {
+  interlockCheck(key: string, checked: boolean) {
     // Adds a compatibility layer for Ceph cluster where the feature interlock of features hasn't
     // been implemented yet. It disables the feature interlock for images which only have one of
     // both interlocked features (at the time of this writing: object-map and fast-diff) enabled.
@@ -463,15 +468,12 @@ export class RbdFormComponent implements OnInit {
         // becoming disabled when manually unchecked.  This is because it
         // triggers an update on `object-map` and if `object-map` doesn't emit,
         // `fast-diff` will not be automatically disabled.
-        this.rbdForm
-          .get('features')
-          .get(feature.interlockedWith)
-          .setValue(false);
+        this.rbdForm.get('features').get(feature.interlockedWith).setValue(false);
       }
     }
   }
 
-  featureFormUpdate(key, checked) {
+  featureFormUpdate(key: string, checked: boolean) {
     if (checked) {
       const required = this.features[key].requires;
       if (required && !this.rbdForm.getValue(required)) {
@@ -700,9 +702,9 @@ export class RbdFormComponent implements OnInit {
     if (!this.mode) {
       this.rbdImage.next('create');
     }
-    this.rbdImage.complete();
     this.rbdImage
       .pipe(
+        first(),
         switchMap(() => {
           if (this.mode === this.rbdFormMode.editing) {
             return this.editAction();

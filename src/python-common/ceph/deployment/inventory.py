@@ -28,6 +28,7 @@ class Devices(object):
         return cls([Device.from_json(i) for i in input])
 
     def copy(self):
+        # type: () -> Devices
         return Devices(devices=list(self.devices))
 
 
@@ -51,9 +52,9 @@ class Device(object):
                  device_id=None,  # type: Optional[str]
                  ):
         self.path = path
-        self.sys_api = sys_api
+        self.sys_api = sys_api if sys_api is not None else {}  # type: Dict[str, Any]
         self.available = available
-        self.rejected_reasons = rejected_reasons
+        self.rejected_reasons = rejected_reasons if rejected_reasons is not None else []
         self.lvs = lvs
         self.device_id = device_id
 

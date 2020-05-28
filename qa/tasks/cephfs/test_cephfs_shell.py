@@ -2,17 +2,21 @@
 Before running this testsuite, add path to cephfs-shell module to $PATH and
 export $PATH.
 """
+from io import BytesIO
 from os import path
+from os import getcwd as os_getcwd
 import crypt
 import logging
 from tempfile import mkstemp as tempfile_mkstemp
+from tempfile import mkdtemp as tempfile_mkdtemp
 import math
+from six import ensure_str
 from sys import version_info as sys_version_info
 from re import search as re_search
 from time import sleep
-from StringIO import StringIO
 from tasks.cephfs.cephfs_test_case import CephFSTestCase
 from teuthology.misc import sudo_write_file
+from teuthology.misc import sh as misc_sh
 from teuthology.orchestra.run import CommandFailedError
 
 log = logging.getLogger(__name__)
@@ -27,50 +31,52 @@ def humansize(nbytes):
     f = ('%d' % nbytes).rstrip('.')
     return '%s%s' % (f, suffixes[i])
 
-def str_to_bool(val):
-    val = val.strip()
-    trueval = ['true', 'yes', 'y', '1']
-    return True if val == 1 or val.lower() in trueval else False
-
 class TestCephFSShell(CephFSTestCase):
     CLIENTS_REQUIRED = 1
 
-    def run_cephfs_shell_cmd(self, cmd, mount_x=None, opts=None, stdin=None, config_path=None):
+    def run_cephfs_shell_cmd(self, cmd, mount_x=None, shell_conf_path=None,
+                             opts=None, stdin=None):
         if mount_x is None:
             mount_x = self.mount_a
-        if config_path is None:
-            config_path = self.mount_a.config_path
 
         if isinstance(cmd, list):
             cmd = " ".join(cmd)
 
-        args = ["cephfs-shell", "-c", config_path]
-
-        if opts is not None:
-            args.extend(opts)
-
+        args = ["cephfs-shell"]
+        if shell_conf_path:
+            args += ["-c", shell_conf_path]
+        if opts:
+            args += opts
         args.extend(("--", cmd))
 
         log.info("Running command: {}".format(" ".join(args)))
-        return mount_x.client_remote.run(args=args, stdout=StringIO(),
-                                         stderr=StringIO(), stdin=stdin)
+        return mount_x.client_remote.run(args=args, stdout=BytesIO(),
+                                         stderr=BytesIO(), stdin=stdin)
 
-    def get_cephfs_shell_cmd_error(self, cmd, mount_x=None, opts=None,
+    def get_cephfs_shell_cmd_error(self, cmd, mount_x=None,
+                                   shell_conf_path=None, opts=None,
+                                   stdin=None):
+        return ensure_str(self.run_cephfs_shell_cmd(
+            cmd=cmd, mount_x=mount_x, shell_conf_path=shell_conf_path,
+            opts=opts, stdin=stdin).stderr.getvalue().strip())
+
+    def get_cephfs_shell_cmd_output(self, cmd, mount_x=None,
+                                    shell_conf_path=None, opts=None,
                                     stdin=None):
-        return self.run_cephfs_shell_cmd(cmd, mount_x, opts, stdin).stderr.\
-            getvalue().strip()
+        return ensure_str(self.run_cephfs_shell_cmd(
+            cmd=cmd, mount_x=mount_x, shell_conf_path=shell_conf_path,
+            opts=opts, stdin=stdin).stdout.getvalue().strip())
 
-    def get_cephfs_shell_cmd_output(self, cmd, mount_x=None, opts=None,
-                                    stdin=None, config_path=None):
-        return self.run_cephfs_shell_cmd(cmd, mount_x, opts, stdin,
-                                         config_path).\
-            stdout.getvalue().strip()
+    def get_cephfs_shell_script_output(self, script, mount_x=None,
+                                       shell_conf_path=None, opts=None,
+                                       stdin=None):
+        return ensure_str(self.run_cephfs_shell_script(
+            script=script, mount_x=mount_x, shell_conf_path=shell_conf_path,
+            opts=opts, stdin=stdin).stdout.getvalue().strip())
 
-    def get_cephfs_shell_script_output(self, script, mount_x=None, stdin=None):
-        return self.run_cephfs_shell_script(script, mount_x, stdin).stdout.\
-            getvalue().strip()
-
-    def run_cephfs_shell_script(self, script, mount_x=None, stdin=None):
+    def run_cephfs_shell_script(self, script, mount_x=None,
+                                shell_conf_path=None, opts=None,
+                                stdin=None):
         if mount_x is None:
             mount_x = self.mount_a
 
@@ -81,10 +87,12 @@ class TestCephFSShell(CephFSTestCase):
         mount_x.client_remote.put_file(scriptpath, scriptpath)
         mount_x.run_shell('chmod 755 ' + scriptpath)
 
-        args = ["cephfs-shell", "-c", mount_x.config_path, '-b', scriptpath]
+        args = ["cephfs-shell", '-b', scriptpath]
+        if shell_conf_path:
+            args[1:1] = ["-c", shell_conf_path]
         log.info('Running script \"' + scriptpath + '\"')
-        return mount_x.client_remote.run(args=args, stdout=StringIO(),
-                                         stderr=StringIO(), stdin=stdin)
+        return mount_x.client_remote.run(args=args, stdout=BytesIO(),
+                                         stderr=BytesIO(), stdin=stdin)
 
 class TestMkdir(TestCephFSShell):
     def test_mkdir(self):
@@ -175,61 +183,120 @@ class TestMkdir(TestCephFSShell):
         o = self.mount_a.stat('d5/d6/d7')
         log.info("mount_a output:\n{}".format(o))
 
-class TestGetAndPut(TestCephFSShell):
-    # the 'put' command gets tested as well with the 'get' comamnd
-    def test_put_and_get_without_target_directory(self):
+class TestRmdir(TestCephFSShell):
+    dir_name = "test_dir"
+
+    def dir_does_not_exists(self):
         """
-        Test that put fails without target path
+        Tests that directory does not exists
         """
-        # generate test data in a directory
-        self.run_cephfs_shell_cmd("!mkdir p1")
-        self.run_cephfs_shell_cmd('!dd if=/dev/urandom of=p1/dump1 bs=1M count=1')
-        self.run_cephfs_shell_cmd('!dd if=/dev/urandom of=p1/dump2 bs=2M count=1')
-        self.run_cephfs_shell_cmd('!dd if=/dev/urandom of=p1/dump3 bs=3M count=1')
-
-        # copy the whole directory over to the cephfs
-        o = self.get_cephfs_shell_cmd_output("put p1")
-        log.info("cephfs-shell output:\n{}".format(o))
-
-        # put p1 should pass
-        o = self.mount_a.stat('p1')
-        log.info("mount_a output:\n{}".format(o))
-        o = self.mount_a.stat('p1/dump1')
-        log.info("mount_a output:\n{}".format(o))
-        o = self.mount_a.stat('p1/dump2')
-        log.info("mount_a output:\n{}".format(o))
-        o = self.mount_a.stat('p1/dump3')
-        log.info("mount_a output:\n{}".format(o))
-
-        self.run_cephfs_shell_cmd('!rm -rf p1')
-        o = self.get_cephfs_shell_cmd_output("get p1")
-        o = self.get_cephfs_shell_cmd_output('!stat p1 || echo $?')
-        log.info("cephfs-shell output:\n{}".format(o))
-        self.validate_stat_output(o)
-
-        o = self.get_cephfs_shell_cmd_output('!stat p1/dump1 || echo $?')
-        log.info("cephfs-shell output:\n{}".format(o))
-        self.validate_stat_output(o)
-
-        o = self.get_cephfs_shell_cmd_output('!stat p1/dump2 || echo $?')
-        log.info("cephfs-shell output:\n{}".format(o))
-        self.validate_stat_output(o)
-
-        o = self.get_cephfs_shell_cmd_output('!stat p1/dump3 || echo $?')
-        log.info("cephfs-shell output:\n{}".format(o))
-        self.validate_stat_output(o)
-
-    def validate_stat_output(self, s):
-        l = s.split('\n')
-        log.info("lines:\n{}".format(l))
-        rv = l[-1] # get last line; a failed stat will have "1" as the line
-        log.info("rv:{}".format(rv))
-        r = 0
         try:
-            r = int(rv) # a non-numeric line will cause an exception
-        except:
-            pass
-        assert(r == 0)
+            self.mount_a.stat(self.dir_name)
+        except CommandFailedError as e:
+            if  e.exitstatus == 2:
+                return 0
+            raise
+
+    def test_rmdir(self):
+        """
+        Test that rmdir deletes directory
+        """
+        self.run_cephfs_shell_cmd("mkdir " + self.dir_name)
+        self.run_cephfs_shell_cmd("rmdir "+ self.dir_name)
+        self.dir_does_not_exists()
+
+    def test_rmdir_non_existing_dir(self):
+        """
+        Test that rmdir does not delete a non existing directory
+        """
+        rmdir_output = self.get_cephfs_shell_cmd_error("rmdir test_dir")
+        log.info("rmdir error output:\n{}".format(rmdir_output))
+        self.dir_does_not_exists()
+
+    def test_rmdir_dir_with_file(self):
+        """
+        Test that rmdir does not delete directory containing file
+        """
+        self.run_cephfs_shell_cmd("mkdir " + self.dir_name)
+        self.run_cephfs_shell_cmd("put - test_dir/dumpfile", stdin="Valid File")
+        self.run_cephfs_shell_cmd("rmdir" + self.dir_name)
+        self.mount_a.stat(self.dir_name)
+
+    def test_rmdir_existing_file(self):
+        """
+        Test that rmdir does not delete a file
+        """
+        self.run_cephfs_shell_cmd("put - dumpfile", stdin="Valid File")
+        self.run_cephfs_shell_cmd("rmdir dumpfile")
+        self.mount_a.stat("dumpfile")
+
+    def test_rmdir_p(self):
+        """
+        Test that rmdir -p deletes all empty directories in the root directory passed
+        """
+        self.run_cephfs_shell_cmd("mkdir -p test_dir/t1/t2/t3")
+        self.run_cephfs_shell_cmd("rmdir -p "+ self.dir_name)
+        self.dir_does_not_exists()
+
+    def test_rmdir_p_valid_path(self):
+        """
+        Test that rmdir -p deletes all empty directories in the path passed
+        """
+        self.run_cephfs_shell_cmd("mkdir -p test_dir/t1/t2/t3")
+        self.run_cephfs_shell_cmd("rmdir -p test_dir/t1/t2/t3")
+        self.dir_does_not_exists()
+
+    def test_rmdir_p_non_existing_dir(self):
+        """
+        Test that rmdir -p does not delete an invalid directory
+        """
+        rmdir_output = self.get_cephfs_shell_cmd_error("rmdir -p test_dir")
+        log.info("rmdir error output:\n{}".format(rmdir_output))
+        self.dir_does_not_exists()
+
+    def test_rmdir_p_dir_with_file(self):
+        """
+        Test that rmdir -p does not delete the directory containing a file
+        """
+        self.run_cephfs_shell_cmd("mkdir " + self.dir_name)
+        self.run_cephfs_shell_cmd("put - test_dir/dumpfile", stdin="Valid File")
+        self.run_cephfs_shell_cmd("rmdir -p " + self.dir_name)
+        self.mount_a.stat(self.dir_name)
+
+class TestGetAndPut(TestCephFSShell):
+    def test_without_target_dir(self):
+        """
+        Test put and get commands without target path.
+        """
+        tempdir = self.mount_a.client_remote.mkdtemp()
+        tempdirname = path.basename(tempdir)
+        files = ('dump1', 'dump2', 'dump3', tempdirname)
+
+        for i, file_ in enumerate(files[ : -1]):
+            size = i + 1
+            ofarg = 'of=' + path.join(tempdir, file_)
+            bsarg = 'bs=' + str(size) + 'M'
+            self.mount_a.run_shell(['dd', 'if=/dev/urandom', ofarg, bsarg,
+                                    'count=1'])
+
+        self.run_cephfs_shell_cmd('put ' + tempdir)
+        for file_ in files:
+            if file_ == tempdirname:
+                self.mount_a.stat(path.join(self.mount_a.mountpoint, file_))
+            else:
+                self.mount_a.stat(path.join(self.mount_a.mountpoint,
+                                            tempdirname, file_))
+
+        self.mount_a.run_shell(['rm', '-rf', tempdir])
+
+        self.run_cephfs_shell_cmd('get ' + tempdirname)
+        pwd = self.get_cephfs_shell_cmd_output('!pwd')
+        for file_ in files:
+            if file_ == tempdirname:
+               self.mount_a.run_shell('stat ' + path.join(pwd, file_))
+            else:
+               self.mount_a.run_shell('stat ' + path.join(pwd, tempdirname,
+                                                          file_))
 
     def test_get_with_target_name(self):
         """
@@ -410,7 +477,7 @@ class TestDU(TestCephFSShell):
 
         du_output = self.get_cephfs_shell_cmd_output('du ' + regfilename)
         if sys_version_info.major >= 3:
-            self.assertRegex(expected_output, du_output)
+            self.assertRegex(du_output, expected_output)
         elif sys_version_info.major < 3:
             assert re_search(expected_output, du_output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -432,7 +499,7 @@ class TestDU(TestCephFSShell):
         sleep(10)
         du_output = self.get_cephfs_shell_cmd_output('du ' + dirname)
         if sys_version_info.major >= 3:
-            self.assertRegex(expected_output, du_output)
+            self.assertRegex(du_output, expected_output)
         elif sys_version_info.major < 3:
             assert re_search(expected_output, du_output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -448,7 +515,7 @@ class TestDU(TestCephFSShell):
 
         du_output = self.get_cephfs_shell_cmd_output('du ' + dirname)
         if sys_version_info.major >= 3:
-            self.assertRegex(expected_output, du_output)
+            self.assertRegex(du_output, expected_output)
         elif sys_version_info.major < 3:
             assert re_search(expected_output, du_output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -469,7 +536,7 @@ class TestDU(TestCephFSShell):
 
         du_output = self.get_cephfs_shell_cmd_output('du ' + hlinkname)
         if sys_version_info.major >= 3:
-            self.assertRegex(expected_output, du_output)
+            self.assertRegex(du_output, expected_output)
         elif sys_version_info.major < 3:
             assert re_search(expected_output, du_output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -488,7 +555,7 @@ class TestDU(TestCephFSShell):
 
         du_output = self.get_cephfs_shell_cmd_output('du ' + slinkname)
         if sys_version_info.major >= 3:
-            self.assertRegex(expected_output, du_output)
+            self.assertRegex(du_output, expected_output)
         elif sys_version_info.major < 3:
             assert re_search(expected_output, du_output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -507,7 +574,7 @@ class TestDU(TestCephFSShell):
 
         du_output = self.get_cephfs_shell_cmd_output('du ' + slinkname)
         if sys_version_info.major >= 3:
-            self.assertRegex(expected_output, du_output)
+            self.assertRegex(du_output, expected_output)
         elif sys_version_info.major < 3:
             assert re_search(expected_output, du_output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -598,7 +665,7 @@ class TestDU(TestCephFSShell):
 
         for expected_output in expected_patterns_in_output:
             if sys_version_info.major >= 3:
-                self.assertRegex(expected_output, du_output)
+                self.assertRegex(du_output, expected_output)
             elif sys_version_info.major < 3:
                 assert re_search(expected_output, du_output) != None, "\n" + \
                        "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -615,7 +682,7 @@ class TestDU(TestCephFSShell):
 
         for expected_output in expected_patterns_in_output:
             if sys_version_info.major >= 3:
-                self.assertRegex(expected_output, du_output)
+                self.assertRegex(du_output, expected_output)
             elif sys_version_info.major < 3:
                 assert re_search(expected_output, du_output) != None, "\n" +\
                        "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -631,7 +698,7 @@ class TestDU(TestCephFSShell):
             # CWD in DU report.
             if expected_output.find('/') == len(expected_output) - 1:
                 if sys_version_info.major >= 3:
-                    self.assertRegex(expected_output, du_output)
+                    self.assertRegex(du_output, expected_output)
                 elif sys_version_info.major < 3:
                     assert re_search(expected_output, du_output) != None, "\n" + \
                         "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -669,7 +736,7 @@ class TestDF(TestCephFSShell):
     def test_df_for_invalid_directory(self):
         dir_abspath = path.join(self.mount_a.mountpoint, 'non-existent-dir')
         proc = self.run_cephfs_shell_cmd('df ' + dir_abspath)
-        assert proc.stderr.getvalue().find('error in stat') != -1
+        assert proc.stderr.getvalue().find(b'error in stat') != -1
 
     def test_df_for_valid_file(self):
         s = 'df test' * 14145016
@@ -764,6 +831,45 @@ class TestQuota(TestCephFSShell):
             else:
                 raise
 
+
+class TestXattr(TestCephFSShell):
+    dir_name = 'testdir'
+
+    def create_dir(self):
+        self.run_cephfs_shell_cmd('mkdir ' + self.dir_name)
+
+    def set_get_list_xattr_vals(self, input_val):
+        setxattr_output = self.get_cephfs_shell_cmd_output('setxattr '
+                                                           + self.dir_name
+                                                           + ' '
+                                                           + input_val[0]
+                                                           + ' ' + input_val[1])
+        log.info("cephfs-shell setxattr output:\n{}".format(setxattr_output))
+
+        getxattr_output = self.get_cephfs_shell_cmd_output('getxattr '
+                                                           + self.dir_name
+                                                           + ' ' + input_val[0])
+        log.info("cephfs-shell getxattr output:\n{}".format(getxattr_output))
+
+        listxattr_output = self.get_cephfs_shell_cmd_output('listxattr '+ self.dir_name)
+        log.info("cephfs-shell listxattr output:\n{}".format(listxattr_output))
+
+        return listxattr_output, getxattr_output
+
+    def test_set(self):
+        self.create_dir()
+        set_values = ('user.key', '2')
+        self.assertTupleEqual(self.set_get_list_xattr_vals(set_values), set_values)
+
+    def test_reset(self):
+        self.test_set()
+        set_values = ('user.key', '4')
+        self.assertTupleEqual(self.set_get_list_xattr_vals(set_values), set_values)
+
+    def test_non_existing_dir(self):
+        set_values = ('user.key', '9')
+        self.assertTupleEqual(self.set_get_list_xattr_vals(set_values), (u'', u''))
+
 #    def test_ls(self):
 #        """
 #        Test that ls passes
@@ -805,12 +911,11 @@ class TestMisc(TestCephFSShell):
         dirname = 'somedirectory'
         self.run_cephfs_shell_cmd(['mkdir', dirname])
 
-        output = self.mount_a.client_remote.run(args=['cephfs-shell', '-c',
-            self.mount_a.config_path, 'ls'],
-            stdout=StringIO()).stdout.getvalue().strip()
+        output = self.mount_a.client_remote.sh(['cephfs-shell', 'ls']).\
+            strip()
 
         if sys_version_info.major >= 3:
-            self.assertRegex(dirname, output)
+            self.assertRegex(output, dirname)
         elif sys_version_info.major < 3:
             assert re_search(dirname, output) != None, "\n" + \
                    "expected_output -\n{}\ndu_output -\n{}\n".format(
@@ -823,50 +928,71 @@ class TestMisc(TestCephFSShell):
         o = self.get_cephfs_shell_cmd_output("help all")
         log.info("output:\n{}".format(o))
 
-class TestConfReading(TestCephFSShell):
-    def test_reading_conf_opt(self):
+class TestShellOpts(TestCephFSShell):
+    """
+    Contains tests for shell options from conf file and shell prompt.
+    """
+
+    def setUp(self):
+        super(type(self), self).setUp()
+
+        # output of following command -
+        # editor - was: 'vim'
+        # now: '?'
+        # editor: '?'
+        self.editor_val = self.get_cephfs_shell_cmd_output(
+            'set editor ?, set editor').split('\n')[2]
+        self.editor_val = self.editor_val.split(':')[1].\
+            replace("'", "", 2).strip()
+
+    def write_tempconf(self, confcontents):
+        self.tempconfpath = self.mount_a.client_remote.mktemp(
+            suffix='cephfs-shell.conf')
+        sudo_write_file(self.mount_a.client_remote, self.tempconfpath,
+                         confcontents)
+
+    def test_reading_conf(self):
+        self.write_tempconf("[cephfs-shell]\neditor =  ???")
+
+        # output of following command -
+        # CephFS:~/>>> set editor
+        # editor: 'vim'
+        final_editor_val = self.get_cephfs_shell_cmd_output(
+            cmd='set editor', shell_conf_path=self.tempconfpath)
+        final_editor_val = final_editor_val.split(': ')[1]
+        final_editor_val = final_editor_val.replace("'", "", 2)
+
+        self.assertNotEqual(self.editor_val, final_editor_val)
+
+    def test_reading_conf_with_dup_opt(self):
         """
         Read conf without duplicate sections/options.
         """
-        debugval = self.fs.mon_manager.raw_cluster_cmd('config', 'get',
-                                                       'client','debug_shell')
-        debugval = str_to_bool(debugval)
-        self.fs.mon_manager.raw_cluster_cmd('config', 'set', 'client',
-                                            'debug_shell', str(not debugval))
-        output = self.get_cephfs_shell_cmd_output('set debug')
-        new_debug_val = \
-            str_to_bool(output[output.find('debug: ') + len('debug: ') : ])
-        assert not debugval == new_debug_val
+        self.write_tempconf("[cephfs-shell]\neditor = ???\neditor = " +
+                            self.editor_val)
 
-    def test_reading_conf_after_setting_opt_twice(self):
-        """
-        Read conf without duplicate sections/options.
-        """
-        debugval = self.fs.mon_manager.raw_cluster_cmd('config', 'get',
-                                                       'client','debug_shell')
-        debugval = str_to_bool(debugval)
+        # output of following command -
+        # CephFS:~/>>> set editor
+        # editor: 'vim'
+        final_editor_val = self.get_cephfs_shell_cmd_output(
+            cmd='set editor', shell_conf_path=self.tempconfpath)
+        final_editor_val = final_editor_val.split(': ')[1]
+        final_editor_val = final_editor_val.replace("'", "", 2)
 
-        self.fs.mon_manager.raw_cluster_cmd('config', 'set', 'client',
-                                            'debug_shell', str(not debugval))
-        self.fs.mon_manager.raw_cluster_cmd('config', 'set', 'client',
-                                            'debug_shell', str(not debugval))
-        output = self.get_cephfs_shell_cmd_output('set debug')
-        new_debug_val = \
-            str_to_bool(output[output.find('debug: ') + len('debug: ') : ])
-        assert not debugval == new_debug_val
+        self.assertEqual(self.editor_val, final_editor_val)
 
-    def test_reading_conf_after_resetting_opt(self):
-        debugval = self.fs.mon_manager.raw_cluster_cmd('config', 'get',
-                                                       'client','debug_shell')
-        debugval = str_to_bool(debugval)
+    def test_setting_opt_after_reading_conf(self):
+        self.write_tempconf("[cephfs-shell]\neditor = ???")
 
-        self.fs.mon_manager.raw_cluster_cmd('config', 'set', 'client',
-                                            'debug_shell', str(not debugval))
-        self.fs.mon_manager.raw_cluster_cmd('config', 'rm', 'client',
-                                            'debug_shell')
-        self.fs.mon_manager.raw_cluster_cmd('config', 'set', 'client',
-                                            'debug_shell', str(not debugval))
-        output = self.get_cephfs_shell_cmd_output('set debug')
-        new_debug_val = \
-            str_to_bool(output[output.find('debug: ') + len('debug: ') : ])
-        assert not debugval == new_debug_val
+        # output of following command -
+        # editor - was: vim
+        # now: vim
+        # editor: vim
+        final_editor_val = self.get_cephfs_shell_cmd_output(
+            cmd='set editor %s, set editor' % (self.editor_val),
+            shell_conf_path=self.tempconfpath)
+        final_editor_val = final_editor_val.split('\n')[2]
+        final_editor_val = final_editor_val.split(': ')[1]
+        final_editor_val = final_editor_val.replace("'", "", 2)
+
+        self.assertEqual(self.editor_val, final_editor_val)

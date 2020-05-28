@@ -73,7 +73,6 @@ set(unittest_librbd_srcs
   image/test_mock_ValidatePoolRequest.cc
   io/test_mock_CopyupRequest.cc
   io/test_mock_ImageRequest.cc
-  io/test_mock_ImageRequestWQ.cc
   io/test_mock_ObjectRequest.cc
   io/test_mock_SimpleSchedulerObjectDispatch.cc
   journal/test_mock_OpenRequest.cc
@@ -87,6 +86,7 @@ set(unittest_librbd_srcs
   managed_lock/test_mock_ReleaseRequest.cc
   mirror/snapshot/test_mock_CreateNonPrimaryRequest.cc
   mirror/snapshot/test_mock_CreatePrimaryRequest.cc
+  mirror/snapshot/test_mock_ImageMeta.cc
   mirror/snapshot/test_mock_PromoteRequest.cc
   mirror/snapshot/test_mock_UnlinkPeerRequest.cc
   mirror/snapshot/test_mock_Utils.cc
@@ -118,7 +118,8 @@ set(unittest_librbd_srcs
 if(WITH_RBD_RWL)
    set(unittest_librbd_srcs
      ${unittest_librbd_srcs}
-     cache/test_mock_ReplicatedWriteLog.cc)
+     cache/test_mock_ReplicatedWriteLog.cc
+     cache/rwl/test_WriteLogMap.cc)
 endif(WITH_RBD_RWL)
 
 add_executable(unittest_librbd
@@ -141,6 +142,7 @@ target_link_libraries(unittest_librbd
   rbd_api
   rbd_internal
   rbd_types
+  ceph_immutable_object_cache_lib
   osdc
   ceph-common
   global

@@ -104,18 +104,20 @@ void AioCompletion::complete() {
       complete_external_callback();
     } else {
       complete_cb(rbd_comp, complete_arg);
+      complete_event_socket();
     }
-  }
-
-  if (ictx != nullptr && event_notify && ictx->event_socket.is_valid()) {
-    ictx->event_socket_completions.push(this);
-    ictx->event_socket.notify();
+  } else {
+    complete_event_socket();
   }
   state = AIO_STATE_COMPLETE;
 
   {
     std::unique_lock<std::mutex> locker(lock);
     cond.notify_all();
+  }
+
+  if (image_dispatcher_ctx != nullptr) {
+    image_dispatcher_ctx->complete(rval);
   }
 
   // note: possible for image to be closed after op marked finished
@@ -261,6 +263,7 @@ void AioCompletion::complete_external_callback() {
     AioCompletion* aio_comp;
     while (ictx->external_callback_completions.pop(aio_comp)) {
       aio_comp->complete_cb(aio_comp->rbd_comp, aio_comp->complete_arg);
+      aio_comp->complete_event_socket();
     }
 
     ictx->external_callback_in_progress.store(false);
@@ -269,6 +272,13 @@ void AioCompletion::complete_external_callback() {
       // pop and resetting the in-progress state
       break;
     }
+  }
+}
+
+void AioCompletion::complete_event_socket() {
+  if (ictx != nullptr && event_notify && ictx->event_socket.is_valid()) {
+    ictx->event_socket_completions.push(this);
+    ictx->event_socket.notify();
   }
 }
 

@@ -155,10 +155,9 @@ ceph_send_command(BaseMgrModule *self, PyObject *args)
     // can wait for those.
     auto c = new LambdaContext([command_c, self](int command_r){
       self->py_modules->get_objecter().wait_for_latest_osdmap(
-          new LambdaContext([command_c, command_r](int wait_r){
-            command_c->complete(command_r);
-          })
-      );
+	[command_c, command_r](boost::system::error_code) {
+	  command_c->complete(command_r);
+	});
     });
 
     self->py_modules->get_monc().start_mon_command(
@@ -186,9 +185,12 @@ ceph_send_command(BaseMgrModule *self, PyObject *args)
         {cmd_json},
         {},
         &tid,
-        &command_c->outbl,
-        &command_c->outs,
-        new C_OnFinisher(command_c, &self->py_modules->cmd_finisher));
+	[command_c, f = &self->py_modules->cmd_finisher]
+	(boost::system::error_code ec, std::string s, ceph::buffer::list bl) {
+	  command_c->outs = std::move(s);
+	  command_c->outbl = std::move(bl);
+	  f->queue(command_c);
+	});
   } else if (std::string(type) == "mds") {
     int r = self->py_modules->get_client().mds_command(
         name,
@@ -221,9 +223,12 @@ ceph_send_command(BaseMgrModule *self, PyObject *args)
         {cmd_json},
         {},
         &tid,
-        &command_c->outbl,
-        &command_c->outs,
-        new C_OnFinisher(command_c, &self->py_modules->cmd_finisher));
+	[command_c, f = &self->py_modules->cmd_finisher]
+	(boost::system::error_code ec, std::string s, ceph::buffer::list bl) {
+	  command_c->outs = std::move(s);
+	  command_c->outbl = std::move(bl);
+	  f->queue(command_c);
+	});
     PyEval_RestoreThread(tstate);
     return nullptr;
   } else {
@@ -399,13 +404,23 @@ ceph_option_get(BaseMgrModule *self, PyObject *args)
   const Option *opt = g_conf().find_option(string(what));
   if (opt) {
     std::string value;
-    int r = g_conf().get_val(string(what), &value);
-    assert(r >= 0);
+    switch (int r = g_conf().get_val(string(what), &value); r) {
+    case -ENOMEM:
+      PyErr_NoMemory();
+      return nullptr;
+    case -ENAMETOOLONG:
+      PyErr_SetString(PyExc_ValueError, "value too long");
+      return nullptr;
+    default:
+      ceph_assert(r == 0);
+      break;
+    }
     dout(10) << "ceph_option_get " << what << " found: " << value << dendl;
     return get_python_typed_option_value(opt->type, value);
   } else {
     dout(4) << "ceph_option_get " << what << " not found " << dendl;
-    Py_RETURN_NONE;
+    PyErr_Format(PyExc_KeyError, "option not found: %s", what);
+    return nullptr;
   }
 }
 
@@ -548,16 +563,8 @@ ceph_cluster_log(BaseMgrModule *self, PyObject *args)
   int prio = 0;
   char *channel = nullptr;
   char *message = nullptr;
-  std::vector<std::string> channels = { "audit", "cluster" };
 
   if (!PyArg_ParseTuple(args, "sis:ceph_cluster_log", &channel, &prio, &message)) {
-    return nullptr;
-  }
-
-  if (std::find(channels.begin(), channels.end(), std::string(channel)) == channels.end()) {
-    std::string msg("Unknown channel: ");
-    msg.append(channel);
-    PyErr_SetString(PyExc_ValueError, msg.c_str());
     return nullptr;
   }
 
@@ -1045,10 +1052,13 @@ ceph_is_authorized(BaseMgrModule *self, PyObject *args)
     arguments[arg_key] = arg_value;
   }
 
-  if (self->this_module->is_authorized(arguments)) {
+  PyThreadState *tstate = PyEval_SaveThread();
+  bool r = self->this_module->is_authorized(arguments);
+  PyEval_RestoreThread(tstate);
+
+  if (r) {
     Py_RETURN_TRUE;
   }
-
   Py_RETURN_FALSE;
 }
 
@@ -1059,9 +1069,9 @@ ceph_register_client(BaseMgrModule *self, PyObject *args)
   if (!PyArg_ParseTuple(args, "s:ceph_register_client", &addrs)) {
     return nullptr;
   }
-
+  PyThreadState *tstate = PyEval_SaveThread();
   self->py_modules->register_client(self->this_module->get_name(), addrs);
-
+  PyEval_RestoreThread(tstate);
   Py_RETURN_NONE;
 }
 
@@ -1072,9 +1082,9 @@ ceph_unregister_client(BaseMgrModule *self, PyObject *args)
   if (!PyArg_ParseTuple(args, "s:ceph_unregister_client", &addrs)) {
     return nullptr;
   }
-
+  PyThreadState *tstate = PyEval_SaveThread();
   self->py_modules->unregister_client(self->this_module->get_name(), addrs);
-
+  PyEval_RestoreThread(tstate);
   Py_RETURN_NONE;
 }
 

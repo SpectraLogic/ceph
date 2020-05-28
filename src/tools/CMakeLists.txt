@@ -16,6 +16,17 @@ else()
 endif()
 install(TARGETS rados DESTINATION bin)
 
+if(WITH_BOOST_CONTEXT)
+set(neorados_srcs
+  neorados.cc)
+add_executable(neorados ${neorados_srcs})
+target_include_directories(neorados PRIVATE
+  $<TARGET_PROPERTY:spawn,INTERFACE_INCLUDE_DIRECTORIES>)
+
+target_link_libraries(neorados libneorados spawn ${CMAKE_DL_LIBS})
+#install(TARGETS neorados DESTINATION bin)
+endif()
+
 if(WITH_TESTS)
 add_executable(ceph_scratchtool scratchtool.c)
 target_link_libraries(ceph_scratchtool librados global)
@@ -50,7 +61,7 @@ add_executable(ceph-objectstore-tool
   RadosDump.cc)
 target_link_libraries(ceph-objectstore-tool osd os global Boost::program_options ${CMAKE_DL_LIBS})
 if(WITH_FUSE)
-  target_link_libraries(ceph-objectstore-tool ${FUSE_LIBRARIES})
+  target_link_libraries(ceph-objectstore-tool FUSE::FUSE)
 endif(WITH_FUSE)
 install(TARGETS ceph-objectstore-tool DESTINATION bin)
 
@@ -87,6 +98,10 @@ set(osdomaptool_srcs osdmaptool.cc)
 add_executable(osdmaptool ${osdomaptool_srcs})
 target_link_libraries(osdmaptool global)
 install(TARGETS osdmaptool DESTINATION bin)
+
+set(ceph-diff-sorted_srcs ceph-diff-sorted.cc)
+add_executable(ceph-diff-sorted ${ceph-diff-sorted_srcs})
+install(TARGETS ceph-diff-sorted DESTINATION bin)
 
 if(WITH_TESTS)
 set(ceph_psim_srcs psim.cc)
@@ -128,3 +143,4 @@ endif()
 
 add_subdirectory(immutable_object_cache)
 add_subdirectory(ceph-dencoder)
+add_subdirectory(erasure-code)

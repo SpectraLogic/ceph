@@ -1,3 +1,6 @@
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
+
 #include "pg_meta.h"
 
 #include <string_view>
@@ -54,7 +57,7 @@ seastar::future<epoch_t> PGMeta::get_epoch()
   });
 }
 
-seastar::future<pg_info_t, PastIntervals> PGMeta::load()
+seastar::future<std::tuple<pg_info_t, PastIntervals>> PGMeta::load()
 {
   return store->open_collection(coll_t{pgid}).then([this](auto ch) {
     return store->omap_get_values(ch,
@@ -63,7 +66,7 @@ seastar::future<pg_info_t, PastIntervals> PGMeta::load()
                                  string{info_key},
                                  string{biginfo_key},
                                  string{fastinfo_key}});
-  }).then([this](auto&& values) {
+  }).then([](auto&& values) {
     {
       // sanity check
       auto infover = find_value<__u8>(values, infover_key);
@@ -92,8 +95,7 @@ seastar::future<pg_info_t, PastIntervals> PGMeta::load()
         fast_info->try_apply_to(&info);
       }
     }
-    return seastar::make_ready_future<pg_info_t, PastIntervals>(
-      std::move(info),
-      std::move(past_intervals));
+    return seastar::make_ready_future<std::tuple<pg_info_t, PastIntervals>>(
+      std::make_tuple(std::move(info), std::move(past_intervals)));
   });
 }

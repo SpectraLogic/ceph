@@ -32,6 +32,8 @@ public:
       return -EINVAL;
     }
 
+    opaque_data = s->info.args.get("OpaqueData");
+
     dest.push_endpoint = s->info.args.get("push-endpoint");
 
     if (!validate_and_update_endpoint_secret(dest, s->cct, *(s->info.env))) {
@@ -57,7 +59,7 @@ public:
     // the topic ARN will be sent in the reply
     const rgw::ARN arn(rgw::Partition::aws, rgw::Service::sns, 
         store->svc()->zone->get_zonegroup().get_name(),
-        s->user->user_id.tenant, topic_name);
+        s->user->get_tenant(), topic_name);
     topic_arn = arn.to_string();
     return 0;
   }
@@ -489,7 +491,7 @@ void RGWPSCreateNotif_ObjStore_S3::execute() {
     // generate the internal topic. destination is stored here for the "push-only" case
     // when no subscription exists
     // ARN is cached to make the "GET" method faster
-    op_ret = ups->create_topic(unique_topic_name, topic_info.dest, topic_info.arn);
+    op_ret = ups->create_topic(unique_topic_name, topic_info.dest, topic_info.arn, topic_info.opaque_data);
     if (op_ret < 0) {
       ldout(s->cct, 1) << "failed to auto-generate unique topic '" << unique_topic_name << 
         "', ret=" << op_ret << dendl;

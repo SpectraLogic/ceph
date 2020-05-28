@@ -19,6 +19,7 @@
 #include <thread>
 
 #include "common/DecayCounter.h"
+#include "include/common_fwd.h"
 #include "include/types.h"
 #include "include/filepath.h"
 #include "include/elist.h"
@@ -60,8 +61,6 @@
 #include "MDSContext.h"
 #include "MDSMap.h"
 #include "Mutation.h"
-
-class PerfCounters;
 
 class MDSRank;
 class Session;
@@ -214,9 +213,7 @@ class MDCache {
     return cache_size() > cache_memory_limit*cache_health_threshold;
   }
 
-  void advance_stray() {
-    stray_index = (stray_index+1)%NUM_STRAY;
-  }
+  void advance_stray();
 
   /**
    * Call this when you know that a CDentry is ready to be passed
@@ -436,6 +433,12 @@ class MDCache {
   void committed_master_slave(metareqid_t r, mds_rank_t from);
   void finish_committed_masters();
 
+  void add_uncommitted_slave(metareqid_t reqid, LogSegment*, mds_rank_t, MDSlaveUpdate *su=nullptr);
+  void wait_for_uncommitted_slave(metareqid_t reqid, MDSContext *c) {
+    uncommitted_slaves.at(reqid).waiters.push_back(c);
+  }
+  void finish_uncommitted_slave(metareqid_t reqid, bool assert_exist=true);
+  MDSlaveUpdate* get_uncommitted_slave(metareqid_t reqid, mds_rank_t master);
   void _logged_slave_commit(mds_rank_t from, metareqid_t reqid);
 
   void set_recovery_set(set<mds_rank_t>& s);
@@ -464,7 +467,7 @@ class MDCache {
   void add_rollback(metareqid_t reqid, mds_rank_t master) {
     resolve_need_rollback[reqid] = master;
   }
-  void finish_rollback(metareqid_t reqid);
+  void finish_rollback(metareqid_t reqid, MDRequestRef& mdr);
 
   // ambiguous imports
   void add_ambiguous_import(dirfrag_t base, const vector<dirfrag_t>& bounds);
@@ -726,6 +729,10 @@ class MDCache {
   void remove_recovered_truncate(CInode *in, LogSegment *ls);
   void start_recovered_truncates();
 
+  // purge unsafe inodes
+  void start_purge_inodes();
+  void purge_inodes(const interval_set<inodeno_t>& i, LogSegment *ls);
+
   CDir *get_auth_container(CDir *in);
   CDir *get_export_container(CDir *dir);
   void find_nested_exports(CDir *dir, set<CDir*>& s);
@@ -757,7 +764,6 @@ class MDCache {
 
   void open_foreign_mdsdir(inodeno_t ino, MDSContext *c);
   CDir *get_stray_dir(CInode *in);
-  CDentry *get_or_create_stray_dentry(CInode *in);
 
   /**
    * Find the given dentry (and whether it exists or not), its ancestors,
@@ -991,6 +997,14 @@ class MDCache {
     bool recovering = false;
   };
 
+  struct uslave {
+    uslave() {}
+    mds_rank_t master;
+    LogSegment *ls = nullptr;
+    MDSlaveUpdate *su = nullptr;
+    MDSContext::vec waiters;
+  };
+
   struct open_ino_info_t {
     open_ino_info_t() {}
     vector<inode_backpointer_t> ancestors;
@@ -1029,9 +1043,6 @@ class MDCache {
   void disambiguate_my_imports();
   void disambiguate_other_imports();
   void trim_unlinked_inodes();
-  void add_uncommitted_slave_update(metareqid_t reqid, mds_rank_t master, MDSlaveUpdate*);
-  void finish_uncommitted_slave_update(metareqid_t reqid, mds_rank_t master);
-  MDSlaveUpdate* get_uncommitted_slave_update(metareqid_t reqid, mds_rank_t master);
 
   void send_slave_resolves();
   void send_subtree_resolves();
@@ -1110,6 +1121,7 @@ class MDCache {
   bool readonly = false;
 
   int stray_index = 0;
+  int stray_fragmenting_index = -1;
 
   set<CInode*> base_inodes;
 
@@ -1135,11 +1147,11 @@ class MDCache {
   // from MMDSResolves
   map<mds_rank_t, map<dirfrag_t, vector<dirfrag_t> > > other_ambiguous_imports;
 
-  map<mds_rank_t, map<metareqid_t, MDSlaveUpdate*> > uncommitted_slave_updates;  // slave: for replay.
   map<CInode*, int> uncommitted_slave_rename_olddir;  // slave: preserve the non-auth dir until seeing commit.
   map<CInode*, int> uncommitted_slave_unlink;  // slave: preserve the unlinked inode until seeing commit.
 
   map<metareqid_t, umaster> uncommitted_masters;         // master: req -> slave set
+  map<metareqid_t, uslave> uncommitted_slaves;  // slave: preserve the slave req until seeing commit.
 
   set<metareqid_t> pending_masters;
   map<int, set<metareqid_t> > ambiguous_slave_updates;

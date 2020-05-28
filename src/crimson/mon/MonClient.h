@@ -1,4 +1,5 @@
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// vim: ts=8 sw=2 smarttab
 
 #pragma once
 
@@ -58,14 +59,14 @@ class Client : public crimson::net::Dispatcher,
   crimson::net::Messenger& msgr;
 
   // commands
-  using get_version_t = seastar::future<version_t, version_t>;
+  using get_version_t = seastar::future<std::tuple<version_t, version_t>>;
 
   ceph_tid_t last_version_req_id = 0;
   std::map<ceph_tid_t, typename get_version_t::promise_type> version_reqs;
 
   ceph_tid_t last_mon_command_id = 0;
   using command_result_t =
-    seastar::future<std::int32_t, string, ceph::bufferlist>;
+    seastar::future<std::tuple<std::int32_t, string, ceph::bufferlist>>;
   std::map<ceph_tid_t, typename command_result_t::promise_type> mon_commands;
 
   MonSub sub;
@@ -106,7 +107,7 @@ private:
 			  const ceph::bufferlist& payload,
 			  ceph::bufferlist *reply) final;
 
-  CephContext cct; // for auth_registry
+  crimson::common::CephContext cct; // for auth_registry
   AuthRegistry auth_registry;
   crimson::common::AuthHandler& auth_handler;
 
@@ -140,7 +141,7 @@ private:
 
   seastar::future<> ms_dispatch(crimson::net::Connection* conn,
 				MessageRef m) override;
-  seastar::future<> ms_handle_reset(crimson::net::ConnectionRef conn) override;
+  seastar::future<> ms_handle_reset(crimson::net::ConnectionRef conn, bool is_replace) override;
 
   seastar::future<> handle_monmap(crimson::net::Connection* conn,
 				  Ref<MMonMap> m);

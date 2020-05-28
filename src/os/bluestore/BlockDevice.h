@@ -28,6 +28,7 @@
 
 #include "acconfig.h"
 #include "common/ceph_mutex.h"
+#include "include/common_fwd.h"
 
 #if defined(HAVE_LIBAIO) || defined(HAVE_POSIXAIO)
 #include "ceph_aio.h"
@@ -63,7 +64,6 @@
 #define  WRITE_LIFE_MAX  	1
 #endif
 
-class CephContext;
 
 /// track in-flight io
 struct IOContext {
@@ -144,6 +144,16 @@ protected:
   bool rotational = true;
   bool lock_exclusive = true;
 
+  // HM-SMR specific properties.  In HM-SMR drives the LBA space is divided into
+  // fixed-size zones.  Typically, the first few zones are randomly writable;
+  // they form a conventional region of the drive.  The remaining zones must be
+  // written sequentially and they must be reset before rewritten.  For example,
+  // a 14 TB HGST HSH721414AL drive has 52156 zones each of size is 256 MiB.
+  // The zones 0-523 are randomly writable and they form the conventional region
+  // of the drive.  The zones 524-52155 are sequential zones.
+  uint64_t conventional_region_size = 0;
+  uint64_t zone_size = 0;
+
 public:
   aio_callback_t aio_callback;
   void *aio_callback_priv;
@@ -158,6 +168,17 @@ public:
     CephContext* cct, const std::string& path, aio_callback_t cb, void *cbpriv, aio_callback_t d_cb, void *d_cbpriv);
   virtual bool supported_bdev_label() { return true; }
   virtual bool is_rotational() { return rotational; }
+
+  // HM-SMR-specific calls
+  virtual bool is_smr() const { return false; }
+  virtual uint64_t get_zone_size() const {
+    ceph_assert(is_smr());
+    return zone_size;
+  }
+  virtual uint64_t get_conventional_region_size() const {
+    ceph_assert(is_smr());
+    return conventional_region_size;
+  }
 
   virtual void aio_submit(IOContext *ioc) = 0;
 
@@ -192,7 +213,7 @@ public:
   virtual int read(
     uint64_t off,
     uint64_t len,
-    bufferlist *pbl,
+    ceph::buffer::list *pbl,
     IOContext *ioc,
     bool buffered) = 0;
   virtual int read_random(
@@ -202,18 +223,18 @@ public:
     bool buffered) = 0;
   virtual int write(
     uint64_t off,
-    bufferlist& bl,
+    ceph::buffer::list& bl,
     bool buffered,
     int write_hint = WRITE_LIFE_NOT_SET) = 0;
 
   virtual int aio_read(
     uint64_t off,
     uint64_t len,
-    bufferlist *pbl,
+    ceph::buffer::list *pbl,
     IOContext *ioc) = 0;
   virtual int aio_write(
     uint64_t off,
-    bufferlist& bl,
+    ceph::buffer::list& bl,
     IOContext *ioc,
     bool buffered,
     int write_hint = WRITE_LIFE_NOT_SET) = 0;

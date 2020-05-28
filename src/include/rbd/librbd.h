@@ -61,7 +61,7 @@ extern "C" {
 #define RBD_FLAG_OBJECT_MAP_INVALID   (1<<0)
 #define RBD_FLAG_FAST_DIFF_INVALID    (1<<1)
 
-#define RBD_MIRROR_IMAGE_STATUS_LOCAL_FSID ""
+#define RBD_MIRROR_IMAGE_STATUS_LOCAL_MIRROR_UUID ""
 
 typedef void *rbd_image_t;
 typedef void *rbd_image_options_t;
@@ -75,11 +75,10 @@ typedef int (*librbd_progress_fn_t)(uint64_t offset, uint64_t total, void *ptr);
 typedef void (*rbd_update_callback_t)(void *arg);
 
 typedef enum {
-  RBD_SNAP_NAMESPACE_TYPE_USER               = 0,
-  RBD_SNAP_NAMESPACE_TYPE_GROUP              = 1,
-  RBD_SNAP_NAMESPACE_TYPE_TRASH              = 2,
-  RBD_SNAP_NAMESPACE_TYPE_MIRROR_PRIMARY     = 3,
-  RBD_SNAP_NAMESPACE_TYPE_MIRROR_NON_PRIMARY = 4,
+  RBD_SNAP_NAMESPACE_TYPE_USER   = 0,
+  RBD_SNAP_NAMESPACE_TYPE_GROUP  = 1,
+  RBD_SNAP_NAMESPACE_TYPE_TRASH  = 2,
+  RBD_SNAP_NAMESPACE_TYPE_MIRROR = 3,
 } rbd_snap_namespace_type_t;
 
 typedef struct {
@@ -163,7 +162,7 @@ typedef struct {
   char *uuid;
   rbd_mirror_peer_direction_t direction;
   char *site_name;
-  char *fsid;
+  char *mirror_uuid;
   char *client_name;
   time_t last_seen;
 } rbd_mirror_peer_site_t;
@@ -208,7 +207,7 @@ typedef struct {
 } rbd_mirror_image_status_t CEPH_RBD_DEPRECATED;
 
 typedef struct {
-  char *fsid;
+  char *mirror_uuid;
   rbd_mirror_image_status_state_t state;
   char *description;
   time_t last_update;
@@ -254,18 +253,22 @@ typedef struct {
   char *group_snap_name;
 } rbd_snap_group_namespace_t;
 
-typedef struct {
-  bool demoted;
-  size_t mirror_peer_uuids_count;
-  char *mirror_peer_uuids;
-} rbd_snap_mirror_primary_namespace_t;
+typedef enum {
+  RBD_SNAP_MIRROR_STATE_PRIMARY,
+  RBD_SNAP_MIRROR_STATE_PRIMARY_DEMOTED,
+  RBD_SNAP_MIRROR_STATE_NON_PRIMARY,
+  RBD_SNAP_MIRROR_STATE_NON_PRIMARY_DEMOTED
+} rbd_snap_mirror_state_t;
 
 typedef struct {
+  rbd_snap_mirror_state_t state;
+  size_t mirror_peer_uuids_count;
+  char *mirror_peer_uuids;
+  bool complete;
   char *primary_mirror_uuid;
   uint64_t primary_snap_id;
-  bool copied;
   uint64_t last_copied_object_number;
-} rbd_snap_mirror_non_primary_namespace_t;
+} rbd_snap_mirror_namespace_t;
 
 typedef enum {
   RBD_LOCK_MODE_EXCLUSIVE = 0,
@@ -289,6 +292,7 @@ enum {
   RBD_IMAGE_OPTION_DATA_POOL = 10,
   RBD_IMAGE_OPTION_FLATTEN = 11,
   RBD_IMAGE_OPTION_CLONE_FORMAT = 12,
+  RBD_IMAGE_OPTION_MIRROR_IMAGE_MODE = 13,
 };
 
 typedef enum {
@@ -498,6 +502,9 @@ CEPH_RBD_API int rbd_mirror_mode_get(rados_ioctx_t io_ctx,
 CEPH_RBD_API int rbd_mirror_mode_set(rados_ioctx_t io_ctx,
                                      rbd_mirror_mode_t mirror_mode);
 
+CEPH_RBD_API int rbd_mirror_uuid_get(rados_ioctx_t io_ctx,
+                                     char *uuid, size_t *max_len);
+
 CEPH_RBD_API int rbd_mirror_peer_bootstrap_create(
     rados_ioctx_t io_ctx, char *token, size_t *max_len);
 CEPH_RBD_API int rbd_mirror_peer_bootstrap_import(
@@ -587,6 +594,14 @@ CEPH_RBD_API int rbd_mirror_image_instance_id_list(rados_ioctx_t io_ctx,
 CEPH_RBD_API void rbd_mirror_image_instance_id_list_cleanup(char **image_ids,
                                                             char **instance_ids,
                                                             size_t len);
+CEPH_RBD_API int rbd_mirror_image_info_list(
+    rados_ioctx_t io_ctx, rbd_mirror_image_mode_t *mode_filter,
+    const char *start_id, size_t max, char **image_ids,
+    rbd_mirror_image_mode_t *mode_entries,
+    rbd_mirror_image_info_t *info_entries, size_t *num_entries);
+CEPH_RBD_API void rbd_mirror_image_info_list_cleanup(
+    char **image_ids, rbd_mirror_image_info_t *info_entries,
+    size_t num_entries);
 
 /* pool metadata */
 CEPH_RBD_API int rbd_pool_metadata_get(rados_ioctx_t io_ctx, const char *key,
@@ -763,6 +778,7 @@ CEPH_RBD_API int rbd_deep_copy_with_progress(rbd_image_t image,
 CEPH_RBD_API int rbd_snap_list(rbd_image_t image, rbd_snap_info_t *snaps,
                                int *max_snaps);
 CEPH_RBD_API void rbd_snap_list_end(rbd_snap_info_t *snaps);
+CEPH_RBD_API int rbd_snap_exists(rbd_image_t image, const char *snapname, bool *exists);
 CEPH_RBD_API int rbd_snap_create(rbd_image_t image, const char *snapname);
 CEPH_RBD_API int rbd_snap_remove(rbd_image_t image, const char *snapname);
 CEPH_RBD_API int rbd_snap_remove2(rbd_image_t image, const char *snap_name,
@@ -845,18 +861,11 @@ CEPH_RBD_API int rbd_snap_get_trash_namespace(rbd_image_t image,
                                               uint64_t snap_id,
                                               char* original_name,
                                               size_t max_length);
-CEPH_RBD_API int rbd_snap_get_mirror_primary_namespace(
+CEPH_RBD_API int rbd_snap_get_mirror_namespace(
     rbd_image_t image, uint64_t snap_id,
-    rbd_snap_mirror_primary_namespace_t *mirror_snap, size_t mirror_snap_size);
-CEPH_RBD_API int rbd_snap_mirror_primary_namespace_cleanup(
-    rbd_snap_mirror_primary_namespace_t *mirror_snap, size_t mirror_snap_size);
-CEPH_RBD_API int rbd_snap_get_mirror_non_primary_namespace(
-    rbd_image_t image, uint64_t snap_id,
-    rbd_snap_mirror_non_primary_namespace_t *mirror_snap,
-    size_t mirror_snap_size);
-CEPH_RBD_API int rbd_snap_mirror_non_primary_namespace_cleanup(
-    rbd_snap_mirror_non_primary_namespace_t *mirror_snap,
-    size_t mirror_snap_size);
+    rbd_snap_mirror_namespace_t *mirror_snap, size_t mirror_snap_size);
+CEPH_RBD_API int rbd_snap_mirror_namespace_cleanup(
+    rbd_snap_mirror_namespace_t *mirror_snap, size_t mirror_snap_size);
 
 CEPH_RBD_API int rbd_flatten(rbd_image_t image);
 
@@ -1192,6 +1201,8 @@ CEPH_RBD_API int rbd_mirror_image_create_snapshot(rbd_image_t image,
 CEPH_RBD_API int rbd_mirror_image_get_info(rbd_image_t image,
                                            rbd_mirror_image_info_t *mirror_image_info,
                                            size_t info_size);
+CEPH_RBD_API void rbd_mirror_image_get_info_cleanup(
+    rbd_mirror_image_info_t *mirror_image_info);
 CEPH_RBD_API int rbd_mirror_image_get_mode(rbd_image_t image,
                                            rbd_mirror_image_mode_t *mode);
 
@@ -1354,6 +1365,38 @@ CEPH_RBD_API int rbd_pool_stats_option_add_uint64(rbd_pool_stats_t stats,
 					          int stat_option,
                                                   uint64_t* stat_val);
 CEPH_RBD_API int rbd_pool_stats_get(rados_ioctx_t io, rbd_pool_stats_t stats);
+
+/**
+ * Register a quiesce/unquiesce watcher.
+ *
+ * @param image the image to watch
+ * @param quiesce_cb what to do when librbd wants to quiesce
+ * @param unquiesce_cb what to do when librbd wants to unquiesce
+ * @param arg opaque value to pass to the callbacks
+ * @param handle where to store the internal id assigned to this watch
+ * @returns 0 on success, negative error code on failure
+ */
+CEPH_RBD_API int rbd_quiesce_watch(rbd_image_t image,
+                                   rbd_update_callback_t quiesce_cb,
+                                   rbd_update_callback_t unquiesce_cb,
+                                   void *arg, uint64_t *handle);
+
+/**
+ * Notify quiesce is complete
+ *
+ * @param image the image to notify
+ * @returns 0 on success
+ */
+CEPH_RADOS_API void rbd_quiesce_complete(rbd_image_t image);
+
+/**
+ * Unregister a quiesce/unquiesce watcher.
+ *
+ * @param image the image to unwatch
+ * @param handle which watch to unregister
+ * @returns 0 on success, negative error code on failure
+ */
+CEPH_RBD_API int rbd_quiesce_unwatch(rbd_image_t image, uint64_t handle);
 
 #if __GNUC__ >= 4
   #pragma GCC diagnostic pop

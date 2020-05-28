@@ -145,10 +145,10 @@ private:
    * REPLAY_COMPLETE  < * * * * * * * * * * * * * * * * * * *   *
    *    |                                                       *
    *    v                                                       *
-   * SHUT_DOWN_LOCAL_JOURNAL_REPLAY                             *
+   * WAIT_FOR_REPLAY                                            *
    *    |                                                       *
    *    v                                                       *
-   * WAIT_FOR_REPLAY                                            *
+   * SHUT_DOWN_LOCAL_JOURNAL_REPLAY                             *
    *    |                                                       *
    *    v                                                       *
    * CLOSE_LOCAL_IMAGE  < * * * * * * * * * * * * * * * * * * * *
@@ -174,7 +174,6 @@ private:
   };
 
   struct C_ReplayCommitted;
-  struct C_TrackedOp;
   struct RemoteJournalerListener;
   struct RemoteReplayHandler;
   struct LocalJournalListener;

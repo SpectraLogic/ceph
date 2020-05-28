@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -x
+set -ex
 
 git submodule update --init --recursive
 
@@ -70,7 +70,7 @@ EOF
 
 echo done.
 
-if [[ ! $ARGS =~ "-DCMAKE_BUILD_TYPE" ]]; then
+if [[ ! "$ARGS $@" =~ "-DCMAKE_BUILD_TYPE" ]]; then
   cat <<EOF
 
 ****

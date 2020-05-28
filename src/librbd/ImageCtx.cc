@@ -21,16 +21,18 @@
 #include "librbd/LibrbdAdminSocketHook.h"
 #include "librbd/ObjectMap.h"
 #include "librbd/Operations.h"
-#include "librbd/operation/ResizeRequest.h"
+#include "librbd/PluginRegistry.h"
 #include "librbd/Types.h"
 #include "librbd/Utils.h"
 #include "librbd/exclusive_lock/AutomaticPolicy.h"
 #include "librbd/exclusive_lock/StandardPolicy.h"
 #include "librbd/io/AioCompletion.h"
 #include "librbd/io/AsyncOperation.h"
-#include "librbd/io/ImageRequestWQ.h"
+#include "librbd/io/ImageDispatcher.h"
 #include "librbd/io/ObjectDispatcher.h"
+#include "librbd/io/QosImageDispatch.h"
 #include "librbd/journal/StandardPolicy.h"
+#include "librbd/operation/ResizeRequest.h"
 
 #include "osdc/Striper.h"
 #include <boost/bind.hpp>
@@ -76,7 +78,7 @@ public:
 
 class SafeTimerSingleton : public SafeTimer {
 public:
-  ceph::mutex lock = ceph::make_mutex("librbd::Journal::SafeTimerSingleton::lock");
+  ceph::mutex lock = ceph::make_mutex("librbd::SafeTimerSingleton::lock");
 
   explicit SafeTimerSingleton(CephContext *cct)
       : SafeTimer(cct, lock, true) {
@@ -100,6 +102,7 @@ public:
       snap_id(CEPH_NOSNAP),
       snap_exists(true),
       read_only(ro),
+      read_only_flags(ro ? IMAGE_READ_ONLY_FLAG_USER : 0U),
       exclusive_locked(false),
       name(image_name),
       image_watcher(NULL),
@@ -120,7 +123,8 @@ public:
       state(new ImageState<>(this)),
       operations(new Operations<>(*this)),
       exclusive_lock(nullptr), object_map(nullptr),
-      io_work_queue(nullptr), op_work_queue(nullptr),
+      op_work_queue(nullptr),
+      plugin_registry(new PluginRegistry<ImageCtx>(this)),
       external_callback_completions(32),
       event_socket_completions(32),
       asok_hook(nullptr),
@@ -136,11 +140,8 @@ public:
 
     ThreadPool *thread_pool;
     get_thread_pool_instance(cct, &thread_pool, &op_work_queue);
-    io_work_queue = new io::ImageRequestWQ<>(
-      this, "librbd::io_work_queue",
-      cct->_conf.get_val<uint64_t>("rbd_op_thread_timeout"),
-      thread_pool);
-    io_object_dispatcher = new io::ObjectDispatcher<>(this);
+    io_image_dispatcher = new io::ImageDispatcher<ImageCtx>(this);
+    io_object_dispatcher = new io::ObjectDispatcher<ImageCtx>(this);
 
     if (cct->_conf.get_val<bool>("rbd_auto_exclusive_lock_until_manual_request")) {
       exclusive_lock_policy = new exclusive_lock::AutomaticPolicy(this);
@@ -172,15 +173,16 @@ public:
     if (data_ctx.is_valid()) {
       data_ctx.aio_flush();
     }
-    io_work_queue->drain();
 
     delete io_object_dispatcher;
+    delete io_image_dispatcher;
 
     delete journal_policy;
     delete exclusive_lock_policy;
-    delete io_work_queue;
     delete operations;
     delete state;
+
+    delete plugin_registry;
   }
 
   void ImageCtx::init() {
@@ -309,7 +311,11 @@ public:
   }
 
   int ImageCtx::get_read_flags(snap_t snap_id) {
-    int flags = librados::OPERATION_NOFLAG | extra_read_flags;
+    int flags = librados::OPERATION_NOFLAG | read_flags;
+    if (flags != 0)
+      return flags;
+
+    flags = librados::OPERATION_NOFLAG | extra_read_flags;
     if (snap_id == LIBRADOS_SNAP_HEAD)
       return flags;
 
@@ -787,31 +793,52 @@ public:
       discard_granularity_bytes = 0;
     }
 
-    io_work_queue->apply_qos_schedule_tick_min(
+    alloc_hint_flags = 0;
+    auto compression_hint = config.get_val<std::string>("rbd_compression_hint");
+    if (compression_hint == "compressible") {
+      alloc_hint_flags |= librados::ALLOC_HINT_FLAG_COMPRESSIBLE;
+    } else if (compression_hint == "incompressible") {
+      alloc_hint_flags |= librados::ALLOC_HINT_FLAG_INCOMPRESSIBLE;
+    }
+
+    librados::Rados rados(md_ctx);
+    int8_t require_osd_release;
+    int r = rados.get_min_compatible_osd(&require_osd_release);
+    if (r == 0 && require_osd_release >= CEPH_RELEASE_OCTOPUS) {
+      read_flags = 0;
+      auto read_policy = config.get_val<std::string>("rbd_read_from_replica_policy");
+      if (read_policy == "balance") {
+        read_flags |= CEPH_OSD_FLAG_BALANCE_READS;
+      } else if (read_policy == "localize") {
+        read_flags |= CEPH_OSD_FLAG_LOCALIZE_READS;
+      }
+    }
+
+    io_image_dispatcher->apply_qos_schedule_tick_min(
       config.get_val<uint64_t>("rbd_qos_schedule_tick_min"));
 
-    io_work_queue->apply_qos_limit(
-      RBD_QOS_IOPS_THROTTLE,
+    io_image_dispatcher->apply_qos_limit(
+      io::IMAGE_DISPATCH_FLAG_QOS_IOPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_iops_limit"),
       config.get_val<uint64_t>("rbd_qos_iops_burst"));
-    io_work_queue->apply_qos_limit(
-      RBD_QOS_BPS_THROTTLE,
+    io_image_dispatcher->apply_qos_limit(
+      io::IMAGE_DISPATCH_FLAG_QOS_BPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_bps_limit"),
       config.get_val<uint64_t>("rbd_qos_bps_burst"));
-    io_work_queue->apply_qos_limit(
-      RBD_QOS_READ_IOPS_THROTTLE,
+    io_image_dispatcher->apply_qos_limit(
+      io::IMAGE_DISPATCH_FLAG_QOS_READ_IOPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_read_iops_limit"),
       config.get_val<uint64_t>("rbd_qos_read_iops_burst"));
-    io_work_queue->apply_qos_limit(
-      RBD_QOS_WRITE_IOPS_THROTTLE,
+    io_image_dispatcher->apply_qos_limit(
+      io::IMAGE_DISPATCH_FLAG_QOS_WRITE_IOPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_write_iops_limit"),
       config.get_val<uint64_t>("rbd_qos_write_iops_burst"));
-    io_work_queue->apply_qos_limit(
-      RBD_QOS_READ_BPS_THROTTLE,
+    io_image_dispatcher->apply_qos_limit(
+      io::IMAGE_DISPATCH_FLAG_QOS_READ_BPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_read_bps_limit"),
       config.get_val<uint64_t>("rbd_qos_read_bps_burst"));
-    io_work_queue->apply_qos_limit(
-      RBD_QOS_WRITE_BPS_THROTTLE,
+    io_image_dispatcher->apply_qos_limit(
+      io::IMAGE_DISPATCH_FLAG_QOS_WRITE_BPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_write_bps_limit"),
       config.get_val<uint64_t>("rbd_qos_write_bps_burst"));
 

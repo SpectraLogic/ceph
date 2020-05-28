@@ -16,6 +16,7 @@
 #define PURGE_QUEUE_H_
 
 #include "include/compact_set.h"
+#include "common/Finisher.h"
 #include "mds/MDSMap.h"
 #include "osdc/Journaler.h"
 
@@ -85,7 +86,9 @@ enum {
 
   // How many items have been finished by PurgeQueue
   l_pq_executing_ops,
+  l_pq_executing_ops_high_water,
   l_pq_executing,
+  l_pq_executing_high_water,
   l_pq_executed,
   l_pq_item_in_journal,
   l_pq_last
@@ -152,7 +155,7 @@ public:
 
   void handle_conf_change(const std::set<std::string>& changed, const MDSMap& mds_map);
 
-protected:
+private:
   uint32_t _calculate_ops(const PurgeItem &item) const;
 
   bool _can_consume();
@@ -215,5 +218,8 @@ protected:
   std::vector<Context*> waiting_for_recovery;
 
   size_t purge_item_journal_size;
+
+  uint64_t ops_high_water = 0;
+  uint64_t files_high_water = 0;
 };
 #endif

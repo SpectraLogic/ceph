@@ -25,11 +25,14 @@
 #include <typeinfo>
 #include <typeindex>
 
+#include <boost/intrusive_ptr.hpp>
+
 #include "include/any.h"
+#include "include/common_fwd.h"
 
 #include "common/cmdparse.h"
 #include "common/code_environment.h"
-#ifdef WITH_SEASTAR
+#if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
 #include "crimson/common/config_proxy.h"
 #include "crimson/common/perf_counters_collection.h"
 #else
@@ -42,11 +45,14 @@
 #include "crush/CrushLocation.h"
 
 class AdminSocket;
-class CephContextServiceThread;
-class CephContextHook;
-class CephContextObs;
 class CryptoHandler;
 class CryptoRandom;
+
+namespace ceph::common {
+  class CephContextServiceThread;
+  class CephContextObs;
+  class CephContextHook;
+}
 
 namespace ceph {
   class PluginRegistry;
@@ -56,7 +62,8 @@ namespace ceph {
   }
 }
 
-#ifdef WITH_SEASTAR
+#if defined(WITH_SEASTAR) && !defined(WITH_ALIEN)
+namespace crimson::common {
 class CephContext {
 public:
   CephContext();
@@ -83,7 +90,11 @@ private:
   std::unique_ptr<CryptoRandom> _crypto_random;
   unsigned nref;
 };
+}
 #else
+#ifdef __cplusplus
+namespace ceph::common {
+#endif
 /* A CephContext represents the context held by a single library user.
  * There can be multiple CephContexts in the same process.
  *
@@ -103,10 +114,10 @@ public:
   CephContext& operator =(CephContext&&) = delete;
 
   bool _finished = false;
+  ~CephContext();
 
   // ref count!
 private:
-  ~CephContext();
   std::atomic<unsigned> nref;
 public:
   CephContext *get() {
@@ -325,7 +336,7 @@ private:
   md_config_obs_t *_lockdep_obs;
 
 public:
-  CrushLocation crush_location;
+  TOPNSPC::crush::CrushLocation crush_location;
 private:
 
   enum {
@@ -361,6 +372,22 @@ private:
 
   friend class CephContextObs;
 };
+#ifdef __cplusplus
+}
+#endif
 #endif	// WITH_SEASTAR
 
+#if !(defined(WITH_SEASTAR) && !defined(WITH_ALIEN)) && defined(__cplusplus)
+namespace ceph::common {
+inline void intrusive_ptr_add_ref(CephContext* cct)
+{
+  cct->get();
+}
+
+inline void intrusive_ptr_release(CephContext* cct)
+{
+  cct->put();
+}
+}
+#endif // !(defined(WITH_SEASTAR) && !defined(WITH_ALIEN)) && defined(__cplusplus)
 #endif

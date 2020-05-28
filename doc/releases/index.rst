@@ -13,9 +13,9 @@ Active Releases
 .. toctree::
    :maxdepth: 1
 
+   Octopus <octopus>
    Nautilus <nautilus>
    Mimic <mimic>
-   Luminous <luminous>
 
 Archived Releases
 -----------------

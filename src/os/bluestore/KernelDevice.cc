@@ -40,6 +40,17 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "bdev(" << this << " " << path << ") "
 
+using std::list;
+using std::map;
+using std::string;
+using std::vector;
+
+using ceph::bufferlist;
+using ceph::bufferptr;
+using ceph::make_timespan;
+using ceph::mono_clock;
+using ceph::operator <<;
+
 KernelDevice::KernelDevice(CephContext* cct, aio_callback_t cb, void *cbpriv, aio_callback_t d_cb, void *d_cbpriv)
   : BlockDevice(cct, cb, cbpriv),
     aio(false), dio(false),
@@ -55,7 +66,7 @@ KernelDevice::KernelDevice(CephContext* cct, aio_callback_t cb, void *cbpriv, ai
   fd_directs.resize(WRITE_LIFE_MAX, -1);
   fd_buffereds.resize(WRITE_LIFE_MAX, -1);
 
-  bool use_ioring = g_ceph_context->_conf.get_val<bool>("bluestore_ioring");
+  bool use_ioring = cct->_conf.get_val<bool>("bluestore_ioring");
   unsigned int iodepth = cct->_conf->bdev_aio_max_queue_depth;
 
   if (use_ioring && ioring_queue_t::supported()) {
@@ -801,18 +812,42 @@ int KernelDevice::_sync_write(uint64_t off, bufferlist &bl, bool buffered, int w
   }
   vector<iovec> iov;
   bl.prepare_iov(&iov);
-  int r = ::pwritev(choose_fd(buffered, write_hint),
-		    &iov[0], iov.size(), off);
 
-  if (r < 0) {
-    r = -errno;
-    derr << __func__ << " pwritev error: " << cpp_strerror(r) << dendl;
-    return r;
-  }
+  auto left = len;
+  auto o = off;
+  size_t idx = 0;
+  do {
+    auto r = ::pwritev(choose_fd(buffered, write_hint),
+      &iov[idx], iov.size() - idx, o);
+
+    if (r < 0) {
+      r = -errno;
+      derr << __func__ << " pwritev error: " << cpp_strerror(r) << dendl;
+      return r;
+    }
+    o += r;
+    left -= r;
+    if (left) {
+      // skip fully processed IOVs
+      while (idx < iov.size() && (size_t)r >= iov[idx].iov_len) {
+        r -= iov[idx++].iov_len;
+      }
+      // update partially processed one if any
+      if (r) {
+        ceph_assert(idx < iov.size());
+        ceph_assert((size_t)r < iov[idx].iov_len);
+        iov[idx].iov_base = static_cast<char*>(iov[idx].iov_base) + r;
+        iov[idx].iov_len -= r;
+        r = 0;
+      }
+      ceph_assert(r == 0);
+    }
+  } while (left);
+
 #ifdef HAVE_SYNC_FILE_RANGE
   if (buffered) {
     // initiate IO and wait till it completes
-    r = ::sync_file_range(fd_buffereds[WRITE_LIFE_NOT_SET], off, len, SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER|SYNC_FILE_RANGE_WAIT_BEFORE);
+    auto r = ::sync_file_range(fd_buffereds[WRITE_LIFE_NOT_SET], off, len, SYNC_FILE_RANGE_WRITE|SYNC_FILE_RANGE_WAIT_AFTER|SYNC_FILE_RANGE_WAIT_BEFORE);
     if (r < 0) {
       r = -errno;
       derr << __func__ << " sync_file_range error: " << cpp_strerror(r) << dendl;
@@ -894,7 +929,7 @@ int KernelDevice::aio_write(
       ioc->pending_aios.push_back(aio_t(ioc, choose_fd(false, write_hint)));
       ++ioc->num_pending;
       auto& aio = ioc->pending_aios.back();
-      bufferptr p = buffer::create_small_page_aligned(len);
+      bufferptr p = ceph::buffer::create_small_page_aligned(len);
       aio.bl.append(std::move(p));
       aio.bl.prepare_iov(&aio.iov);
       aio.preadv(off, len);
@@ -978,7 +1013,7 @@ int KernelDevice::read(uint64_t off, uint64_t len, bufferlist *pbl,
 
   auto start1 = mono_clock::now();
 
-  auto p = buffer::ptr_node::create(buffer::create_small_page_aligned(len));
+  auto p = ceph::buffer::ptr_node::create(ceph::buffer::create_small_page_aligned(len));
   int r = ::pread(buffered ? fd_buffereds[WRITE_LIFE_NOT_SET] : fd_directs[WRITE_LIFE_NOT_SET],
 		  p->c_str(), len, off);
   auto age = cct->_conf->bdev_debug_aio_log_age;
@@ -1028,7 +1063,7 @@ int KernelDevice::aio_read(
     ioc->pending_aios.push_back(aio_t(ioc, fd_directs[WRITE_LIFE_NOT_SET]));
     ++ioc->num_pending;
     aio_t& aio = ioc->pending_aios.back();
-    bufferptr p = buffer::create_small_page_aligned(len);
+    bufferptr p = ceph::buffer::create_small_page_aligned(len);
     aio.bl.append(std::move(p));
     aio.bl.prepare_iov(&aio.iov);
     aio.preadv(off, len);
@@ -1049,7 +1084,7 @@ int KernelDevice::direct_read_unaligned(uint64_t off, uint64_t len, char *buf)
 {
   uint64_t aligned_off = p2align(off, block_size);
   uint64_t aligned_len = p2roundup(off+len, block_size) - aligned_off;
-  bufferptr p = buffer::create_small_page_aligned(aligned_len);
+  bufferptr p = ceph::buffer::create_small_page_aligned(aligned_len);
   int r = 0;
 
   auto start1 = mono_clock::now();
@@ -1138,7 +1173,7 @@ int KernelDevice::read_random(uint64_t off, uint64_t len, char *buf,
     if (r < 0) {
       r = -errno;
       derr << __func__ << " direct_aligned_read" << " 0x" << std::hex
-        << off << "~" << left << std::dec << " error: " << cpp_strerror(r)
+	   << off << "~" << std::left << std::dec << " error: " << cpp_strerror(r)
         << dendl;
       goto out;
     }

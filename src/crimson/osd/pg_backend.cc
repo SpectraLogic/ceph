@@ -15,11 +15,11 @@
 #include "os/Transaction.h"
 #include "common/Clock.h"
 
-#include "crimson/os/cyanstore/cyan_object.h"
 #include "crimson/os/futurized_collection.h"
 #include "crimson/os/futurized_store.h"
 #include "crimson/osd/osd_operation.h"
 #include "replicated_backend.h"
+#include "replicated_recovery_backend.h"
 #include "ec_backend.h"
 #include "exceptions.h"
 
@@ -67,7 +67,7 @@ PGBackend::load_metadata(const hobject_t& oid)
   return store->get_attrs(
     coll,
     ghobject_t{oid, ghobject_t::NO_GEN, shard}).safe_then(
-      [oid, this](auto &&attrs) -> load_metadata_ertr::future<loaded_object_md_t::ref>{
+      [oid](auto &&attrs) -> load_metadata_ertr::future<loaded_object_md_t::ref>{
 	loaded_object_md_t::ref ret(new loaded_object_md_t());
 	if (auto oiiter = attrs.find(OI_ATTR); oiiter != attrs.end()) {
 	  bufferlist bl;
@@ -100,7 +100,7 @@ PGBackend::load_metadata(const hobject_t& oid)
 
 	return load_metadata_ertr::make_ready_future<loaded_object_md_t::ref>(
 	  std::move(ret));
-      }, crimson::ct_error::enoent::handle([oid, this] {
+      }, crimson::ct_error::enoent::handle([oid] {
 	logger().debug(
 	  "load_metadata: object {} doesn't exist, returning empty metadata",
 	  oid);
@@ -119,10 +119,10 @@ PGBackend::mutate_object(
   std::set<pg_shard_t> pg_shards,
   crimson::osd::ObjectContextRef &&obc,
   ceph::os::Transaction&& txn,
-  const MOSDOp& m,
+  const osd_op_params_t& osd_op_p,
   epoch_t min_epoch,
   epoch_t map_epoch,
-  eversion_t ver)
+  std::vector<pg_log_entry_t>&& log_entries)
 {
   logger().trace("mutate_object: num_ops={}", txn.get_num_ops());
   if (obc->obs.exists) {
@@ -131,8 +131,13 @@ PGBackend::mutate_object(
     obc->obs.oi.prior_version = ctx->obs->oi.version;
 #endif
 
-    obc->obs.oi.last_reqid = m.get_reqid();
-    obc->obs.oi.mtime = m.get_mtime();
+    auto& m = osd_op_p.req;
+    obc->obs.oi.prior_version = obc->obs.oi.version;
+    obc->obs.oi.version = osd_op_p.at_version;
+    if (osd_op_p.user_at_version > obc->obs.oi.user_version)
+      obc->obs.oi.user_version = osd_op_p.user_at_version;
+    obc->obs.oi.last_reqid = m->get_reqid();
+    obc->obs.oi.mtime = m->get_mtime();
     obc->obs.oi.local_mtime = ceph_clock_now();
 
     // object_info_t
@@ -148,7 +153,7 @@ PGBackend::mutate_object(
   }
   return _submit_transaction(
     std::move(pg_shards), obc->obs.oi.soid, std::move(txn),
-    m.get_reqid(), min_epoch, map_epoch, ver);
+    std::move(osd_op_p), min_epoch, map_epoch, std::move(log_entries));
 }
 
 static inline bool _read_verify_data(
@@ -194,6 +199,7 @@ PGBackend::read(const object_info_t& oi,
   return _read(oi.soid, offset, length, flags).safe_then(
     [&oi](auto&& bl) -> read_errorator::future<ceph::bufferlist> {
       if (const bool is_fine = _read_verify_data(oi, bl); is_fine) {
+	logger().debug("read: data length: {}", bl.length());
         return read_errorator::make_ready_future<bufferlist>(std::move(bl));
       } else {
         return crimson::ct_error::object_corrupted::make();
@@ -239,7 +245,8 @@ bool PGBackend::maybe_create_new_object(
 seastar::future<> PGBackend::write(
     ObjectState& os,
     const OSDOp& osd_op,
-    ceph::os::Transaction& txn)
+    ceph::os::Transaction& txn,
+    osd_op_params_t& osd_op_params)
 {
   const ceph_osd_op& op = osd_op.op;
   uint64_t offset = op.extent.offset;
@@ -268,6 +275,13 @@ seastar::future<> PGBackend::write(
       if (op.extent.truncate_size != os.oi.size) {
         os.oi.size = length;
         // TODO: truncate_update_size_and_usage()
+	if (op.extent.truncate_size > os.oi.size) {
+	  osd_op_params.clean_regions.mark_data_region_dirty(os.oi.size,
+	      op.extent.truncate_size - os.oi.size);
+	} else {
+	  osd_op_params.clean_regions.mark_data_region_dirty(op.extent.truncate_size,
+	      os.oi.size - op.extent.truncate_size);
+	}
       }
     }
     os.oi.truncate_seq = op.extent.truncate_seq;
@@ -285,13 +299,17 @@ seastar::future<> PGBackend::write(
 	      offset, length, std::move(buf), op.flags);
     os.oi.size = std::max(offset + length, os.oi.size);
   }
+  osd_op_params.clean_regions.mark_data_region_dirty(op.extent.offset,
+						     op.extent.length);
+
   return seastar::now();
 }
 
 seastar::future<> PGBackend::writefull(
   ObjectState& os,
   const OSDOp& osd_op,
-  ceph::os::Transaction& txn)
+  ceph::os::Transaction& txn,
+  osd_op_params_t& osd_op_params)
 {
   const ceph_osd_op& op = osd_op.op;
   if (op.extent.length != osd_op.indata.length()) {
@@ -301,11 +319,15 @@ seastar::future<> PGBackend::writefull(
   const bool existing = maybe_create_new_object(os, txn);
   if (existing && op.extent.length < os.oi.size) {
     txn.truncate(coll->get_cid(), ghobject_t{os.oi.soid}, op.extent.length);
+    osd_op_params.clean_regions.mark_data_region_dirty(op.extent.length,
+	os.oi.size - op.extent.length);
   }
   if (op.extent.length) {
     txn.write(coll->get_cid(), ghobject_t{os.oi.soid}, 0, op.extent.length,
               osd_op.indata, op.flags);
     os.oi.size = op.extent.length;
+    osd_op_params.clean_regions.mark_data_region_dirty(0,
+	std::max((uint64_t) op.extent.length, os.oi.size));
   }
   return seastar::now();
 }
@@ -352,7 +374,7 @@ seastar::future<> PGBackend::remove(ObjectState& os,
   return seastar::now();
 }
 
-seastar::future<std::vector<hobject_t>, hobject_t>
+seastar::future<std::tuple<std::vector<hobject_t>, hobject_t>>
 PGBackend::list_objects(const hobject_t& start, uint64_t limit) const
 {
   auto gstart = start.is_min() ? ghobject_t{} : ghobject_t{start, 0, shard};
@@ -360,7 +382,8 @@ PGBackend::list_objects(const hobject_t& start, uint64_t limit) const
                              gstart,
                              ghobject_t::get_max(),
                              limit)
-    .then([this](std::vector<ghobject_t> gobjects, ghobject_t next) {
+    .then([](auto ret) {
+      auto& [gobjects, next] = ret;
       std::vector<hobject_t> objects;
       boost::copy(gobjects |
         boost::adaptors::filtered([](const ghobject_t& o) {
@@ -376,8 +399,8 @@ PGBackend::list_objects(const hobject_t& start, uint64_t limit) const
           return o.hobj;
         }),
         std::back_inserter(objects));
-      return seastar::make_ready_future<std::vector<hobject_t>, hobject_t>(
-        objects, next.hobj);
+      return seastar::make_ready_future<std::tuple<std::vector<hobject_t>, hobject_t>>(
+        std::make_tuple(objects, next.hobj));
     });
 }
 
@@ -447,10 +470,10 @@ PGBackend::get_attr_errorator::future<ceph::bufferptr> PGBackend::getxattr(
 
 static seastar::future<crimson::os::FuturizedStore::omap_values_t>
 maybe_get_omap_vals_by_keys(
-  auto& store,
-  const auto& coll,
-  const auto& oi,
-  const auto& keys_to_get)
+  crimson::os::FuturizedStore* store,
+  const crimson::os::CollectionRef& coll,
+  const object_info_t& oi,
+  const std::set<std::string>& keys_to_get)
 {
   if (oi.is_omap()) {
     return store->omap_get_values(coll, ghobject_t{oi.soid}, keys_to_get);
@@ -460,19 +483,26 @@ maybe_get_omap_vals_by_keys(
   }
 }
 
-static seastar::future<bool, crimson::os::FuturizedStore::omap_values_t>
+static seastar::future<std::tuple<bool, crimson::os::FuturizedStore::omap_values_t>>
 maybe_get_omap_vals(
-  auto& store,
-  const auto& coll,
-  const auto& oi,
-  const auto& start_after)
+  crimson::os::FuturizedStore* store,
+  const crimson::os::CollectionRef& coll,
+  const object_info_t& oi,
+  const std::string& start_after)
 {
   if (oi.is_omap()) {
     return store->omap_get_values(coll, ghobject_t{oi.soid}, start_after);
   } else {
-    return seastar::make_ready_future<bool, crimson::os::FuturizedStore::omap_values_t>(
-      true, crimson::os::FuturizedStore::omap_values_t{});
+    return seastar::make_ready_future<std::tuple<bool, crimson::os::FuturizedStore::omap_values_t>>(
+      std::make_tuple(true, crimson::os::FuturizedStore::omap_values_t{}));
   }
+}
+
+seastar::future<ceph::bufferlist> PGBackend::omap_get_header(
+  crimson::os::CollectionRef& c,
+  const ghobject_t& oid)
+{
+  return store->omap_get_header(c, oid);
 }
 
 seastar::future<> PGBackend::omap_get_keys(
@@ -493,17 +523,18 @@ seastar::future<> PGBackend::omap_get_keys(
 
   // TODO: truly chunk the reading
   return maybe_get_omap_vals(store, coll, os.oi, start_after).then(
-    [=, &osd_op] (bool, crimson::os::FuturizedStore::omap_values_t vals) {
+    [=, &osd_op] (auto ret) {
       ceph::bufferlist result;
       bool truncated = false;
       uint32_t num = 0;
-      for (auto& [key, val] : vals) {
-        if (num++ >= max_return ||
+      for (auto& [key, val] : std::get<1>(ret)) {
+        if (num >= max_return ||
             result.length() >= local_conf()->osd_max_omap_bytes_per_request) {
           truncated = true;
           break;
         }
         encode(key, result);
+        ++num;
       }
       encode(num, osd_op.outdata);
       osd_op.outdata.claim_append(result);
@@ -537,8 +568,8 @@ seastar::future<> PGBackend::omap_get_vals(
 
   // TODO: truly chunk the reading
   return maybe_get_omap_vals(store, coll, os.oi, start_after).then(
-    [=, &osd_op] (const bool done,
-                  crimson::os::FuturizedStore::omap_values_t vals) {
+    [=, &osd_op] (auto&& ret) {
+      auto [done, vals] = std::move(ret);
       assert(done);
       ceph::bufferlist result;
       bool truncated = false;
@@ -593,7 +624,8 @@ seastar::future<> PGBackend::omap_get_vals_by_keys(
 seastar::future<> PGBackend::omap_set_vals(
   ObjectState& os,
   const OSDOp& osd_op,
-  ceph::os::Transaction& txn)
+  ceph::os::Transaction& txn,
+  osd_op_params_t& osd_op_params)
 {
   maybe_create_new_object(os, txn);
 
@@ -615,5 +647,24 @@ seastar::future<> PGBackend::omap_set_vals(
   //ctx->delta_stats.num_wr_kb += shift_round_up(to_set_bl.length(), 10);
   os.oi.set_flag(object_info_t::FLAG_OMAP);
   os.oi.clear_omap_digest();
+  osd_op_params.clean_regions.mark_omap_dirty();
   return seastar::now();
 }
+
+seastar::future<struct stat> PGBackend::stat(
+  CollectionRef c,
+  const ghobject_t& oid) const
+{
+  return store->stat(c, oid);
+}
+
+seastar::future<std::map<uint64_t, uint64_t>>
+PGBackend::fiemap(
+  CollectionRef c,
+  const ghobject_t& oid,
+  uint64_t off,
+  uint64_t len)
+{
+  return store->fiemap(c, oid, off, len);
+}
+

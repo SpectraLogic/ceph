@@ -26,6 +26,7 @@
 #include "events/ESlaveUpdate.h"
 #include "events/EOpen.h"
 #include "events/ECommitted.h"
+#include "events/EPurged.h"
 
 #include "events/EExport.h"
 #include "events/EImportStart.h"
@@ -118,6 +119,14 @@ void LogSegment::try_to_expire(MDSRank *mds, MDSGatherBuilder &gather_bld, int o
     mds->mdcache->wait_for_uncommitted_master(*p, gather_bld.new_sub());
   }
 
+  // slave ops that haven't been committed
+  for (set<metareqid_t>::iterator p = uncommitted_slaves.begin();
+       p != uncommitted_slaves.end();
+       ++p) {
+    dout(10) << "try_to_expire waiting for master to ack OP_FINISH on " << *p << dendl;
+    mds->mdcache->wait_for_uncommitted_slave(*p, gather_bld.new_sub());
+  }
+
   // uncommitted fragments
   for (set<dirfrag_t>::iterator p = uncommitted_fragments.begin();
        p != uncommitted_fragments.end();
@@ -193,16 +202,6 @@ void LogSegment::try_to_expire(MDSRank *mds, MDSGatherBuilder &gather_bld, int o
 
   ceph_assert(g_conf()->mds_kill_journal_expire_at != 4);
 
-  // slave updates
-  for (elist<MDSlaveUpdate*>::iterator p = slave_updates.begin(member_offset(MDSlaveUpdate,
-									     item));
-       !p.end(); ++p) {
-    MDSlaveUpdate *su = *p;
-    dout(10) << "try_to_expire waiting on slave update " << su << dendl;
-    ceph_assert(su->waiter == 0);
-    su->waiter = gather_bld.new_sub();
-  }
-
   // idalloc
   if (inotablev > mds->inotable->get_committed_version()) {
     dout(10) << "try_to_expire saving inotable table, need " << inotablev
@@ -261,6 +260,10 @@ void LogSegment::try_to_expire(MDSRank *mds, MDSGatherBuilder &gather_bld, int o
     dout(10) << "try_to_expire waiting for truncate of " << **p << dendl;
     (*p)->add_waiter(CInode::WAIT_TRUNC, gather_bld.new_sub());
   }
+  // purge inodes
+  dout(10) << "try_to_expire waiting for purge of " << purge_inodes << dendl;
+  if (purge_inodes.size())
+    set_purged_cb(gather_bld.new_sub());
   
   if (gather_bld.has_subs()) {
     dout(6) << "LogSegment(" << seq << "/" << offset << ").try_to_expire waiting" << dendl;
@@ -270,7 +273,6 @@ void LogSegment::try_to_expire(MDSRank *mds, MDSGatherBuilder &gather_bld, int o
     dout(6) << "LogSegment(" << seq << "/" << offset << ").try_to_expire success" << dendl;
   }
 }
-
 
 // -----------------------
 // EMetaBlob
@@ -424,7 +426,7 @@ void EMetaBlob::fullbit::decode(bufferlist::const_iterator &bl) {
   decode(dnlast, bl);
   decode(dnv, bl);
   decode(inode, bl);
-  decode(xattrs, bl);
+  decode_noshare(xattrs, bl);
   if (inode.is_symlink())
     decode(symlink, bl);
   if (inode.is_dir()) {
@@ -791,7 +793,7 @@ void EMetaBlob::encode(bufferlist& bl, uint64_t features) const
 }
 void EMetaBlob::decode(bufferlist::const_iterator &bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(7, 5, 5, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(8, 5, 5, bl);
   decode(lump_order, bl);
   decode(lump_map, bl);
   if (struct_v >= 4) {
@@ -1496,11 +1498,7 @@ void EMetaBlob::replay(MDSRank *mds, LogSegment *logseg, MDSlaveUpdate *slaveup)
 	dout(20) << " (session prealloc " << session->info.prealloc_inos << ")" << dendl;
 	if (used_preallocated_ino) {
 	  if (!session->info.prealloc_inos.empty()) {
-	    inodeno_t next = session->next_ino();
 	    inodeno_t i = session->take_ino(used_preallocated_ino);
-	    if (next != i)
-	      mds->clog->warn() << " replayed op " << client_reqs << " used ino " << i
-			       << " but session next is " << next;
 	    ceph_assert(i == used_preallocated_ino);
 	    session->info.used_inos.clear();
 	  }
@@ -1602,6 +1600,60 @@ void EMetaBlob::replay(MDSRank *mds, LogSegment *logseg, MDSlaveUpdate *slaveup)
 }
 
 // -----------------------
+// EPurged
+void EPurged::update_segment()
+{
+  if (inos.size() && inotablev)
+    get_segment()->inotablev = inotablev;
+  return;
+}
+
+void EPurged::replay(MDSRank *mds)
+{
+  if (inos.size()) {
+    LogSegment *ls = mds->mdlog->get_segment(seq);
+    if (ls) {
+      ls->purge_inodes.subtract(inos);
+    }
+    if (mds->inotable->get_version() >= inotablev) {
+      dout(10) << "EPurged.replay inotable " << mds->inotable->get_version()
+	       << " >= " << inotablev << ", noop" << dendl;
+    } else {
+      dout(10) << "EPurged.replay inotable " << mds->inotable->get_version()
+	       << " < " << inotablev << " " << dendl;
+      mds->inotable->replay_release_ids(inos);
+      assert(mds->inotable->get_version() == inotablev);
+    }
+  }
+  update_segment();
+}
+
+void EPurged::encode(bufferlist& bl, uint64_t features) const
+{
+  ENCODE_START(1, 1, bl);
+  encode(inos, bl);
+  encode(inotablev, bl);
+  encode(seq, bl);
+  ENCODE_FINISH(bl);
+}
+
+void EPurged::decode(bufferlist::const_iterator& bl)
+{
+  DECODE_START(1, bl);
+  decode(inos, bl);
+  decode(inotablev, bl);
+  decode(seq, bl);
+  DECODE_FINISH(bl);
+}
+
+void EPurged::dump(Formatter *f) const
+{
+  f->dump_stream("inos") << inos;
+  f->dump_int("inotable version", inotablev);
+  f->dump_int("segment seq", seq);
+}
+
+// -----------------------
 // ESession
 
 void ESession::update_segment()
@@ -1613,6 +1665,9 @@ void ESession::update_segment()
 
 void ESession::replay(MDSRank *mds)
 {
+  if (purge_inos.size())
+    get_segment()->purge_inodes.insert(purge_inos);
+  
   if (mds->sessionmap.get_version() >= cmapv) {
     dout(10) << "ESession.replay sessionmap " << mds->sessionmap.get_version() 
 	     << " >= " << cmapv << ", noop" << dendl;
@@ -1673,7 +1728,7 @@ void ESession::replay(MDSRank *mds)
 
 void ESession::encode(bufferlist &bl, uint64_t features) const
 {
-  ENCODE_START(5, 5, bl);
+  ENCODE_START(6, 5, bl);
   encode(stamp, bl);
   encode(client_inst, bl, features);
   encode(open, bl);
@@ -1681,12 +1736,13 @@ void ESession::encode(bufferlist &bl, uint64_t features) const
   encode(inos, bl);
   encode(inotablev, bl);
   encode(client_metadata, bl);
+  encode(purge_inos, bl);
   ENCODE_FINISH(bl);
 }
 
 void ESession::decode(bufferlist::const_iterator &bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(5, 3, 3, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(6, 3, 3, bl);
   if (struct_v >= 2)
     decode(stamp, bl);
   decode(client_inst, bl);
@@ -1699,6 +1755,10 @@ void ESession::decode(bufferlist::const_iterator &bl)
   } else if (struct_v >= 5) {
     decode(client_metadata, bl);
   }
+  if (struct_v >= 6){
+    decode(purge_inos, bl);
+  }
+    
   DECODE_FINISH(bl);
 }
 
@@ -2434,7 +2494,6 @@ void ESlaveUpdate::generate_test_instances(std::list<ESlaveUpdate*>& ls)
   ls.push_back(new ESlaveUpdate());
 }
 
-
 void ESlaveUpdate::replay(MDSRank *mds)
 {
   MDSlaveUpdate *su;
@@ -2443,29 +2502,21 @@ void ESlaveUpdate::replay(MDSRank *mds)
   case ESlaveUpdate::OP_PREPARE:
     dout(10) << "ESlaveUpdate.replay prepare " << reqid << " for mds." << master 
 	     << ": applying commit, saving rollback info" << dendl;
-    su = new MDSlaveUpdate(origop, rollback, segment->slave_updates);
+    su = new MDSlaveUpdate(origop, rollback);
     commit.replay(mds, segment, su);
-    mds->mdcache->add_uncommitted_slave_update(reqid, master, su);
+    mds->mdcache->add_uncommitted_slave(reqid, segment, master, su);
     break;
 
   case ESlaveUpdate::OP_COMMIT:
-    su = mds->mdcache->get_uncommitted_slave_update(reqid, master);
-    if (su) {
-      dout(10) << "ESlaveUpdate.replay commit " << reqid << " for mds." << master << dendl;
-      mds->mdcache->finish_uncommitted_slave_update(reqid, master);
-    } else {
-      dout(10) << "ESlaveUpdate.replay commit " << reqid << " for mds." << master 
-	       << ": ignoring, no previously saved prepare" << dendl;
-    }
+    dout(10) << "ESlaveUpdate.replay commit " << reqid << " for mds." << master << dendl;
+    mds->mdcache->finish_uncommitted_slave(reqid, false);
     break;
 
   case ESlaveUpdate::OP_ROLLBACK:
     dout(10) << "ESlaveUpdate.replay abort " << reqid << " for mds." << master
 	     << ": applying rollback commit blob" << dendl;
     commit.replay(mds, segment);
-    su = mds->mdcache->get_uncommitted_slave_update(reqid, master);
-    if (su)
-      mds->mdcache->finish_uncommitted_slave_update(reqid, master);
+    mds->mdcache->finish_uncommitted_slave(reqid, false);
     break;
 
   default:
@@ -3091,7 +3142,7 @@ void ENoOp::decode(bufferlist::const_iterator &bl)
     // journal debug tools catch it and recognise a malformed entry.
     throw buffer::end_of_buffer();
   } else {
-    bl.advance(pad_size);
+    bl += pad_size;
   }
   DECODE_FINISH(bl);
 }

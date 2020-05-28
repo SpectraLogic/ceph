@@ -42,7 +42,9 @@ class MonClient;
 
 class MDSDaemon : public Dispatcher {
  public:
-  MDSDaemon(std::string_view n, Messenger *m, MonClient *mc);
+  MDSDaemon(std::string_view n, Messenger *m, MonClient *mc,
+	    boost::asio::io_context& ioctx);
+
   ~MDSDaemon() override;
 
   mono_time get_starttime() const {
@@ -129,6 +131,7 @@ class MDSDaemon : public Dispatcher {
 
   Messenger    *messenger;
   MonClient    *monc;
+  boost::asio::io_context& ioctx;
   MgrClient     mgrc;
   std::unique_ptr<MDSMap> mdsmap;
   LogClient    log_client;
@@ -139,17 +142,8 @@ class MDSDaemon : public Dispatcher {
   // tick and other timer fun
   Context *tick_event = nullptr;
   class MDSSocketHook *asok_hook = nullptr;
+
  private:
-  struct MDSCommand {
-    MDSCommand(std::string_view signature, std::string_view help)
-        : cmdstring(signature), helpstring(help)
-    {}
-
-    std::string cmdstring;
-    std::string helpstring;
-    std::string module = "mds";
-  };
-
   bool ms_dispatch2(const ref_t<Message> &m) override;
   int ms_handle_authentication(Connection *con) override;
   void ms_handle_accept(Connection *con) override;
@@ -157,8 +151,6 @@ class MDSDaemon : public Dispatcher {
   bool ms_handle_reset(Connection *con) override;
   void ms_handle_remote_reset(Connection *con) override;
   bool ms_handle_refused(Connection *con) override;
-
-  static const std::vector<MDSCommand>& get_commands();
 
   bool parse_caps(const AuthCapsInfo&, MDSAuthCaps&);
 

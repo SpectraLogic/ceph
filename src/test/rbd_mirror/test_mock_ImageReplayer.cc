@@ -101,11 +101,13 @@ struct BootstrapRequest<librbd::MockTestImageCtx> {
   static BootstrapRequest* create(
       Threads<librbd::MockTestImageCtx>* threads,
       librados::IoCtx &local_io_ctx,
-      librados::IoCtx &remote_io_ctx,
+      librados::IoCtx& remote_io_ctx,
       rbd::mirror::InstanceWatcher<librbd::MockTestImageCtx> *instance_watcher,
       const std::string &global_image_id,
       const std::string &local_mirror_uuid,
+      const RemotePoolMeta& remote_pool_meta,
       ::journal::CacheManagerHandler *cache_manager_handler,
+      PoolMetaCache* pool_meta_cache,
       rbd::mirror::ProgressContext *progress_ctx,
       StateBuilder<librbd::MockTestImageCtx>** state_builder,
       bool *do_resync, Context *on_finish) {
@@ -173,8 +175,9 @@ struct StateBuilder<librbd::MockTestImageCtx> {
   }
 
   MOCK_METHOD1(close, void(Context*));
-  MOCK_METHOD3(create_replayer, Replayer*(Threads<librbd::MockTestImageCtx>*,
-                                          const std::string&,
+  MOCK_METHOD5(create_replayer, Replayer*(Threads<librbd::MockTestImageCtx>*,
+                                          InstanceWatcher<librbd::MockTestImageCtx>*,
+                                          const std::string&, PoolMetaCache*,
                                           ReplayerListener*));
 
   StateBuilder() {
@@ -299,9 +302,9 @@ public:
 
   void expect_create_replayer(MockStateBuilder& mock_state_builder,
                               MockReplayer& mock_replayer) {
-    EXPECT_CALL(mock_state_builder, create_replayer(_, _, _))
-      .WillOnce(WithArg<2>(
-        Invoke([this, &mock_replayer]
+    EXPECT_CALL(mock_state_builder, create_replayer(_, _, _, _, _))
+      .WillOnce(WithArg<4>(
+        Invoke([&mock_replayer]
                (image_replayer::ReplayerListener* replayer_listener) {
           mock_replayer.replayer_listener = replayer_listener;
           return &mock_replayer;
@@ -317,14 +320,14 @@ public:
 
   void expect_init(MockReplayer& mock_replayer, int r) {
     EXPECT_CALL(mock_replayer, init(_))
-      .WillOnce(Invoke([this, &mock_replayer, r](Context* ctx) {
+      .WillOnce(Invoke([this, r](Context* ctx) {
                   m_threads->work_queue->queue(ctx, r);
                 }));
   }
 
   void expect_shut_down(MockReplayer& mock_replayer, int r) {
     EXPECT_CALL(mock_replayer, shut_down(_))
-      .WillOnce(Invoke([this, &mock_replayer, r](Context* ctx) {
+      .WillOnce(Invoke([this, r](Context* ctx) {
                   m_threads->work_queue->queue(ctx, r);
                 }));
     EXPECT_CALL(mock_replayer, destroy());
@@ -353,9 +356,12 @@ public:
   void create_image_replayer(MockThreads &mock_threads) {
     m_image_replayer = new MockImageReplayer(
         m_local_io_ctx, "local_mirror_uuid", "global image id",
-        &mock_threads, &m_instance_watcher, &m_local_status_updater, nullptr);
-    m_image_replayer->add_peer("peer_uuid", m_remote_io_ctx,
-                               &m_remote_status_updater);
+        &mock_threads, &m_instance_watcher, &m_local_status_updater, nullptr,
+        nullptr);
+    m_image_replayer->add_peer({"peer_uuid", m_remote_io_ctx,
+                                {"remote mirror uuid",
+                                 "remote mirror peer uuid"},
+                                &m_remote_status_updater});
   }
 
   void wait_for_stopped() {

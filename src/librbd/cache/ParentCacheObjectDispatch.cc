@@ -6,7 +6,7 @@
 #include "librbd/Journal.h"
 #include "librbd/Utils.h"
 #include "librbd/io/ObjectDispatchSpec.h"
-#include "librbd/io/ObjectDispatcher.h"
+#include "librbd/io/ObjectDispatcherInterface.h"
 #include "librbd/io/Utils.h"
 #include "librbd/cache/ParentCacheObjectDispatch.h"
 #include "osd/osd_types.h"
@@ -45,8 +45,11 @@ void ParentCacheObjectDispatch<I>::init(Context* on_finish) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 5) << dendl;
 
-  if (m_image_ctx->parent != nullptr) {
-    ldout(cct, 5) << "child image: skipping" << dendl;
+  if (m_image_ctx->child == nullptr) {
+    ldout(cct, 5) << "non-parent image: skipping" << dendl;
+    if (on_finish != nullptr) {
+      on_finish->complete(-EINVAL);
+    }
     return;
   }
 
@@ -60,7 +63,7 @@ void ParentCacheObjectDispatch<I>::init(Context* on_finish) {
   m_connecting.store(true);
   create_cache_session(create_session_ctx, false);
 
-  m_image_ctx->io_object_dispatcher->register_object_dispatch(this);
+  m_image_ctx->io_object_dispatcher->register_dispatch(this);
   m_initialized = true;
 }
 

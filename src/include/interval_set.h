@@ -208,9 +208,9 @@ class interval_set {
     auto p = m.lower_bound(start);  // p->first >= start
     if (p != m.begin() &&
         (p == m.end() || p->first > start)) {
-      p--;   // might overlap?
+      --p;   // might overlap?
       if (p->first + p->second <= start)
-        p++; // it doesn't.
+        ++p; // it doesn't.
     }
     return p;
   }
@@ -219,9 +219,9 @@ class interval_set {
     auto p = m.lower_bound(start);
     if (p != m.begin() &&
         (p == m.end() || p->first > start)) {
-      p--;   // might overlap?
+      --p;   // might overlap?
       if (p->first + p->second <= start)
-        p++; // it doesn't.
+        ++p; // it doesn't.
     }
     return p;
   }
@@ -230,9 +230,9 @@ class interval_set {
     auto p = m.lower_bound(start);
     if (p != m.begin() &&
         (p == m.end() || p->first > start)) {
-      p--;   // might touch?
+      --p;   // might touch?
       if (p->first + p->second < start)
-        p++; // it doesn't.
+        ++p; // it doesn't.
     }
     return p;
   }
@@ -241,9 +241,9 @@ class interval_set {
     auto p = m.lower_bound(start);
     if (p != m.begin() &&
         (p == m.end() || p->first > start)) {
-      p--;   // might touch?
+      --p;   // might touch?
       if (p->first + p->second < start)
-        p++; // it doesn't.
+        ++p; // it doesn't.
     }
     return p;
   }
@@ -468,7 +468,7 @@ class interval_set {
         p->second += len;               // append to end
         
         auto n = p;
-        n++;
+        ++n;
 	if (pstart)
 	  *pstart = p->first;
         if (n != m.end() && 
@@ -509,7 +509,6 @@ class interval_set {
   
   void erase(iterator &i) {
     _size -= i.get_len();
-    ceph_assert(_size >= 0);
     m.erase(i._iter);
   }
 
@@ -522,7 +521,6 @@ class interval_set {
     auto p = find_inc_m(start);
 
     _size -= len;
-    ceph_assert(_size >= 0);
 
     ceph_assert(p != m.end());
     ceph_assert(p->first <= start);

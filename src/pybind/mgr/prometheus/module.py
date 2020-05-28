@@ -191,7 +191,7 @@ class Module(MgrModule):
         {'name': 'server_port'},
         {'name': 'scrape_interval'},
         {'name': 'rbd_stats_pools'},
-        {'name': 'rbd_stats_pools_refresh_interval'},
+        {'name': 'rbd_stats_pools_refresh_interval', 'type': 'int', 'default': 300},
     ]
 
     def __init__(self, *args, **kwargs):
@@ -318,7 +318,8 @@ class Module(MgrModule):
         metrics['pg_total'] = Metric(
             'gauge',
             'pg_total',
-            'PG Total Count'
+            'PG Total Count per Pool',
+            ('pool_id',)
         )
 
         for flag in OSD_FLAGS:
@@ -357,7 +358,8 @@ class Module(MgrModule):
             metrics[path] = Metric(
                 'gauge',
                 path,
-                'PG {}'.format(state),
+                'PG {} per pool'.format(state),
+                ('pool_id',)
             )
         for state in DF_CLUSTER:
             path = 'cluster_{}'.format(state)
@@ -484,13 +486,13 @@ class Module(MgrModule):
                 ceph_release = host_version[1].split()[-2] # e.g. nautilus
             else:
                 _state = 0
-            
+
             self.metrics['mgr_metadata'].set(1, (
                 'mgr.{}'.format(mgr), host_version[0],
                 host_version[1]
             ))
             self.metrics['mgr_status'].set(_state, (
-                'mgr.{}'.format(mgr), 
+                'mgr.{}'.format(mgr),
             ))
         always_on_modules = mgr_map['always_on_modules'].get(ceph_release, [])
         active_modules = list(always_on_modules)
@@ -510,32 +512,23 @@ class Module(MgrModule):
             self.metrics['mgr_module_can_run'].set(_can_run, (mod_name,))
 
     def get_pg_status(self):
-        # TODO add per pool status?
-        pg_status = self.get('pg_status')
 
-        # Set total count of PGs, first
-        self.metrics['pg_total'].set(pg_status['num_pgs'])
+        pg_summary = self.get('pg_summary')
 
-        reported_states = {}
-        for pg in pg_status['pgs_by_state']:
-            for state in pg['state_name'].split('+'):
-                reported_states[state] = reported_states.get(
-                    state, 0) + pg['count']
+        for pool in pg_summary['by_pool']:
+            num_by_state = dict((state, 0) for state in PG_STATES)
+            num_by_state['total'] = 0
 
-        for state in reported_states:
-            path = 'pg_{}'.format(state)
-            try:
-                self.metrics[path].set(reported_states[state])
-            except KeyError:
-                self.log.warn("skipping pg in unknown state {}".format(state))
+            for state_name, count in pg_summary['by_pool'][pool].items():
+                for state in state_name.split('+'):
+                    num_by_state[state] += count
+                num_by_state['total'] += count
 
-        for state in PG_STATES:
-            if state not in reported_states:
+            for state, num in num_by_state.items():
                 try:
-                    self.metrics['pg_{}'.format(state)].set(0)
+                    self.metrics["pg_{}".format(state)].set(num, (pool,))
                 except KeyError:
-                    self.log.warn(
-                        "skipping pg in unknown state {}".format(state))
+                    self.log.warning("skipping pg in unknown state {}".format(state))
 
     def get_osd_stats(self):
         osd_stats = self.get('osd_stats')
@@ -907,6 +900,33 @@ class Module(MgrModule):
             del self.rbd_stats['query']
         self.rbd_stats['pools'].clear()
 
+    def add_fixed_name_metrics(self):
+        """
+        Add fixed name metrics from existing ones that have details in their names
+        that should be in labels (not in name).
+        For backward compatibility, a new fixed name metric is created (instead of replacing)
+        and details are put in new labels.
+        Intended for RGW sync perf. counters but extendable as required.
+        See: https://tracker.ceph.com/issues/45311
+        """
+        new_metrics = {}
+        for metric_path in self.metrics.keys():
+            # Address RGW sync perf. counters.
+            match = re.search('^data-sync-from-(.*)\.', metric_path)
+            if match:
+                new_path = re.sub('from-([^.]*)', 'from-zone', metric_path)
+                if new_path not in new_metrics:
+                    new_metrics[new_path] = Metric(
+                        self.metrics[metric_path].mtype,
+                        new_path,
+                        self.metrics[metric_path].desc,
+                        self.metrics[metric_path].labelnames + ('source_zone',)
+                    )
+                for label_values, value in self.metrics[metric_path].value.items():
+                    new_metrics[new_path].set(value, label_values + (match.group(1),))
+
+        self.metrics.update(new_metrics)
+
     def collect(self):
         # Clear the metrics before scraping
         for k in self.metrics.keys():
@@ -969,6 +989,7 @@ class Module(MgrModule):
                         )
                     self.metrics[path].set(value, labels)
 
+        self.add_fixed_name_metrics()
         self.get_rbd_stats()
 
         # Return formatted metrics and clear no longer used data

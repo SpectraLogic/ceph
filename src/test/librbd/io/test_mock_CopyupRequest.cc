@@ -10,10 +10,10 @@
 #include "test/librados_test_stub/MockTestMemIoCtxImpl.h"
 #include "test/librados_test_stub/MockTestMemRadosClient.h"
 #include "include/rbd/librbd.hpp"
+#include "librbd/api/Io.h"
 #include "librbd/deep_copy/ObjectCopyRequest.h"
 #include "librbd/io/CopyupRequest.h"
 #include "librbd/io/ImageRequest.h"
-#include "librbd/io/ImageRequestWQ.h"
 #include "librbd/io/ObjectRequest.h"
 #include "librbd/io/ReadResult.h"
 
@@ -25,6 +25,10 @@ struct MockTestImageCtx : public MockImageCtx {
                    MockTestImageCtx* mock_parent_image_ctx = nullptr)
     : MockImageCtx(image_ctx) {
     parent = mock_parent_image_ctx;
+  }
+  ~MockTestImageCtx() override {
+    // copyups need to complete prior to attempting to delete this object
+    wait_for_async_ops();
   }
 
   std::map<uint64_t, librbd::io::CopyupRequest<librbd::MockTestImageCtx>*> copyup_list;
@@ -47,9 +51,11 @@ struct ObjectCopyRequest<librbd::MockTestImageCtx> {
   static ObjectCopyRequest* s_instance;
   static ObjectCopyRequest* create(librbd::MockImageCtx* parent_image_ctx,
                                    librbd::MockTestImageCtx* image_ctx,
+                                   librados::snap_t src_snap_id_start,
+                                   librados::snap_t dst_snap_id_start,
                                    const SnapMap &snap_map,
                                    uint64_t object_number, bool flatten,
-                                   Context *on_finish) {
+                                   Handler*, Context *on_finish) {
     ceph_assert(s_instance != nullptr);
     s_instance->object_number = object_number;
     s_instance->flatten = flatten;
@@ -334,7 +340,7 @@ struct TestMockIoCopyupRequest : public TestMockFixture {
   }
 
   void flush_async_operations(librbd::ImageCtx* ictx) {
-    ictx->io_work_queue->flush();
+    api::Io<>::flush(*ictx);
   }
 
   std::string m_parent_image_name;

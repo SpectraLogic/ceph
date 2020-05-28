@@ -13,7 +13,7 @@
 #include "test/librbd/mock/MockObjectMap.h"
 #include "test/librbd/mock/MockOperations.h"
 #include "test/librbd/mock/MockReadahead.h"
-#include "test/librbd/mock/io/MockImageRequestWQ.h"
+#include "test/librbd/mock/io/MockImageDispatcher.h"
 #include "test/librbd/mock/io/MockObjectDispatcher.h"
 #include "common/RWLock.h"
 #include "common/WorkQueue.h"
@@ -56,6 +56,8 @@ struct MockImageCtx {
       snap_ids(image_ctx.snap_ids),
       old_format(image_ctx.old_format),
       read_only(image_ctx.read_only),
+      read_only_flags(image_ctx.read_only_flags),
+      read_only_mask(image_ctx.read_only_mask),
       clone_copy_on_read(image_ctx.clone_copy_on_read),
       lockers(image_ctx.lockers),
       exclusive_locked(image_ctx.exclusive_locked),
@@ -81,7 +83,7 @@ struct MockImageCtx {
       format_string(image_ctx.format_string),
       group_spec(image_ctx.group_spec),
       layout(image_ctx.layout),
-      io_work_queue(new io::MockImageRequestWQ()),
+      io_image_dispatcher(new io::MockImageDispatcher()),
       io_object_dispatcher(new io::MockObjectDispatcher()),
       op_work_queue(new MockContextWQ()),
       readahead_max_bytes(image_ctx.readahead_max_bytes),
@@ -97,6 +99,8 @@ struct MockImageCtx {
       non_blocking_aio(image_ctx.non_blocking_aio),
       blkin_trace_all(image_ctx.blkin_trace_all),
       enable_alloc_hint(image_ctx.enable_alloc_hint),
+      alloc_hint_flags(image_ctx.alloc_hint_flags),
+      read_flags(image_ctx.read_flags),
       ignore_migrating(image_ctx.ignore_migrating),
       enable_sparse_copyup(image_ctx.enable_sparse_copyup),
       mtime_update_interval(image_ctx.mtime_update_interval),
@@ -112,8 +116,9 @@ struct MockImageCtx {
     }
   }
 
-  ~MockImageCtx() {
+  virtual ~MockImageCtx() {
     wait_for_async_requests();
+    wait_for_async_ops();
     image_ctx->md_ctx.aio_flush();
     image_ctx->data_ctx.aio_flush();
     image_ctx->op_work_queue->drain();
@@ -121,10 +126,11 @@ struct MockImageCtx {
     delete operations;
     delete image_watcher;
     delete op_work_queue;
-    delete io_work_queue;
+    delete io_image_dispatcher;
     delete io_object_dispatcher;
   }
 
+  void wait_for_async_ops();
   void wait_for_async_requests() {
     async_ops_lock.lock();
     if (async_requests.empty()) {
@@ -229,10 +235,12 @@ struct MockImageCtx {
   ::SnapContext snapc;
   std::vector<librados::snap_t> snaps;
   std::map<librados::snap_t, SnapInfo> snap_info;
-  std::map<std::pair<cls::rbd::SnapshotNamespace, std::string>, librados::snap_t> snap_ids;
+  std::map<ImageCtx::SnapKey, librados::snap_t, ImageCtx::SnapKeyComparator> snap_ids;
 
   bool old_format;
   bool read_only;
+  uint32_t read_only_flags;
+  uint32_t read_only_mask;
 
   bool clone_copy_on_read;
 
@@ -275,7 +283,7 @@ struct MockImageCtx {
 
   std::map<uint64_t, io::CopyupRequest<MockImageCtx>*> copyup_list;
 
-  io::MockImageRequestWQ *io_work_queue;
+  io::MockImageDispatcher *io_image_dispatcher;
   io::MockObjectDispatcher *io_object_dispatcher;
   MockContextWQ *op_work_queue;
 
@@ -286,6 +294,7 @@ struct MockImageCtx {
 
   EventSocket &event_socket;
 
+  MockImageCtx *child = nullptr;
   MockImageCtx *parent;
   MockOperations *operations;
   MockImageState *state;
@@ -303,6 +312,8 @@ struct MockImageCtx {
   bool non_blocking_aio;
   bool blkin_trace_all;
   bool enable_alloc_hint;
+  uint32_t alloc_hint_flags;
+  uint32_t read_flags;
   bool ignore_migrating;
   bool enable_sparse_copyup;
   uint64_t mtime_update_interval;

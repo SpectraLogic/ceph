@@ -23,10 +23,9 @@ endif()
 
 # unittest_lockdep
 add_executable(unittest_lockdep
-  test_lockdep.cc
-  )
+  test_lockdep.cc)
 add_ceph_unittest(unittest_lockdep)
-target_link_libraries(unittest_lockdep ceph-common global)
+target_link_libraries(unittest_lockdep ceph-common)
 
 # FreeBSD only has shims to support NUMA, no functional code.
 if(LINUX)
@@ -194,6 +193,13 @@ add_executable(unittest_url_escape
 add_ceph_unittest(unittest_url_escape)
 target_link_libraries(unittest_url_escape ceph-common)
 
+# unittest_pretty_binary
+add_executable(unittest_pretty_binary
+  test_pretty_binary.cc
+  )
+add_ceph_unittest(unittest_pretty_binary)
+target_link_libraries(unittest_pretty_binary ceph-common)
+
 # unittest_readahead
 add_executable(unittest_readahead
   Readahead.cc
@@ -304,6 +310,9 @@ add_executable(unittest_bounded_key_counter
 target_link_libraries(unittest_bounded_key_counter global)
 add_ceph_unittest(unittest_bounded_key_counter)
 
+add_executable(unittest_split test_split.cc)
+add_ceph_unittest(unittest_split)
+
 add_executable(unittest_static_ptr test_static_ptr.cc)
 add_ceph_unittest(unittest_static_ptr)
 
@@ -320,9 +329,14 @@ add_executable(unittest_async_shared_mutex test_async_shared_mutex.cc)
 add_ceph_unittest(unittest_async_shared_mutex)
 target_link_libraries(unittest_async_shared_mutex ceph-common Boost::system)
 
-add_executable(unittest_rabin_chunk test_rabin_chunk.cc
+add_executable(unittest_cdc test_cdc.cc
   $<TARGET_OBJECTS:unit-main>)
-target_link_libraries(unittest_rabin_chunk global ceph-common)
-add_ceph_unittest(unittest_rabin_chunk)
+target_link_libraries(unittest_cdc global ceph-common)
+add_ceph_unittest(unittest_cdc)
 
+add_executable(unittest_ceph_timer test_ceph_timer.cc)
+add_ceph_unittest(unittest_ceph_timer)
 
+add_executable(unittest_blocked_completion test_blocked_completion.cc)
+add_ceph_unittest(unittest_blocked_completion)
+target_link_libraries(unittest_blocked_completion Boost::system GTest::GTest)

@@ -32,6 +32,13 @@
 #include "libpmem.h"
 #endif
 
+#if defined(HAVE_LIBZBC)
+#include "HMSMRDevice.h"
+extern "C" {
+#include <libzbc/zbc.h>
+}
+#endif
+
 #include "common/debug.h"
 #include "common/EventTrace.h"
 #include "common/errno.h"
@@ -41,6 +48,8 @@
 #define dout_subsys ceph_subsys_bdev
 #undef dout_prefix
 #define dout_prefix *_dout << "bdev "
+
+using std::string;
 
 void IOContext::aio_wait()
 {
@@ -121,16 +130,22 @@ BlockDevice *BlockDevice::create(CephContext* cct, const string& path,
   }
 #endif
 #if defined(HAVE_LIBAIO) || defined(HAVE_POSIXAIO)
+#if defined(HAVE_LIBZBC)
+  if (zbc_device_is_zoned(path.c_str(), false, nullptr)) {
+    return new HMSMRDevice(cct, cb, cbpriv, d_cb, d_cbpriv);
+  }
+#endif
   if (type == "kernel") {
     return new KernelDevice(cct, cb, cbpriv, d_cb, d_cbpriv);
   }
 #endif
+#ifndef WITH_SEASTAR
 #if defined(HAVE_SPDK)
   if (type == "ust-nvme") {
     return new NVMEDevice(cct, cb, cbpriv);
   }
 #endif
-
+#endif
 
   derr << __func__ << " unknown backend " << type << dendl;
   ceph_abort();

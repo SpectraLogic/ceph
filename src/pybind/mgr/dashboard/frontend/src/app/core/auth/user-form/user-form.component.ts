@@ -1,5 +1,5 @@
 import { Component, OnInit, TemplateRef, ViewChild } from '@angular/core';
-import { FormControl, Validators } from '@angular/forms';
+import { Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { I18n } from '@ngx-translate/i18n-polyfill';
@@ -16,12 +16,14 @@ import { SelectMessages } from '../../../shared/components/select/select-message
 import { ActionLabelsI18n } from '../../../shared/constants/app.constants';
 import { Icons } from '../../../shared/enum/icons.enum';
 import { NotificationType } from '../../../shared/enum/notification-type.enum';
+import { CdForm } from '../../../shared/forms/cd-form';
+import { CdFormBuilder } from '../../../shared/forms/cd-form-builder';
 import { CdFormGroup } from '../../../shared/forms/cd-form-group';
 import { CdValidators } from '../../../shared/forms/cd-validators';
 import { CdPwdExpirationSettings } from '../../../shared/models/cd-pwd-expiration-settings';
 import { AuthStorageService } from '../../../shared/services/auth-storage.service';
 import { NotificationService } from '../../../shared/services/notification.service';
-import { UserChangePasswordService } from '../../../shared/services/user-change-password.service';
+import { PasswordPolicyService } from '../../../shared/services/password-policy.service';
 import { UserFormMode } from './user-form-mode.enum';
 import { UserFormRoleModel } from './user-form-role.model';
 import { UserFormModel } from './user-form.model';
@@ -31,7 +33,7 @@ import { UserFormModel } from './user-form.model';
   templateUrl: './user-form.component.html',
   styleUrls: ['./user-form.component.scss']
 })
-export class UserFormComponent implements OnInit {
+export class UserFormComponent extends CdForm implements OnInit {
   @ViewChild('removeSelfUserReadUpdatePermissionTpl', { static: true })
   removeSelfUserReadUpdatePermissionTpl: TemplateRef<any>;
 
@@ -46,9 +48,9 @@ export class UserFormComponent implements OnInit {
   messages = new SelectMessages({ empty: this.i18n('There are no roles.') }, this.i18n);
   action: string;
   resource: string;
-  requiredPasswordRulesMessage: string;
-  passwordStrengthLevel: string;
-  passwordStrengthDescription: string;
+  passwordPolicyHelpText = '';
+  passwordStrengthLevelClass: string;
+  passwordValuation: string;
   icons = Icons;
   minDate: Date;
   bsConfig = {
@@ -68,41 +70,50 @@ export class UserFormComponent implements OnInit {
     private notificationService: NotificationService,
     private i18n: I18n,
     public actionLabels: ActionLabelsI18n,
-    private userChangePasswordService: UserChangePasswordService,
+    private passwordPolicyService: PasswordPolicyService,
+    private formBuilder: CdFormBuilder,
     private settingsService: SettingsService
   ) {
+    super();
     this.resource = this.i18n('user');
     this.createForm();
     this.messages = new SelectMessages({ empty: this.i18n('There are no roles.') }, this.i18n);
   }
 
   createForm() {
-    this.requiredPasswordRulesMessage = this.userChangePasswordService.getPasswordRulesMessage();
-    this.userForm = new CdFormGroup(
+    this.passwordPolicyService.getHelpText().subscribe((helpText: string) => {
+      this.passwordPolicyHelpText = helpText;
+    });
+    this.userForm = this.formBuilder.group(
       {
-        username: new FormControl('', {
-          validators: [Validators.required]
-        }),
-        name: new FormControl(''),
-        password: new FormControl('', {
-          validators: [
-            CdValidators.custom('checkPassword', () => {
-              return this.userForm && this.checkPassword(this.userForm.getValue('password'));
-            })
+        username: [
+          '',
+          [Validators.required],
+          [CdValidators.unique(this.userService.validateUserName, this.userService)]
+        ],
+        name: [''],
+        password: [
+          '',
+          [],
+          [
+            CdValidators.passwordPolicy(
+              this.userService,
+              () => this.userForm.getValue('username'),
+              (_valid: boolean, credits: number, valuation: string) => {
+                this.passwordStrengthLevelClass = this.passwordPolicyService.mapCreditsToCssClass(
+                  credits
+                );
+                this.passwordValuation = _.defaultTo(valuation, '');
+              }
+            )
           ]
-        }),
-        confirmpassword: new FormControl('', {
-          updateOn: 'blur',
-          validators: []
-        }),
-        pwdExpirationDate: new FormControl(''),
-        email: new FormControl('', {
-          validators: [Validators.email]
-        }),
-        roles: new FormControl([]),
-        enabled: new FormControl(true, {
-          validators: [Validators.required]
-        })
+        ],
+        confirmpassword: [''],
+        pwdExpirationDate: [''],
+        email: ['', [CdValidators.email]],
+        roles: [[]],
+        enabled: [true, [Validators.required]],
+        pwdUpdateRequired: [true]
       },
       {
         validators: [CdValidators.match('password', 'confirmpassword')]
@@ -119,7 +130,7 @@ export class UserFormComponent implements OnInit {
     }
     this.minDate = new Date();
 
-    const observables = [this.roleService.list(), this.settingsService.pwdExpirationSettings()];
+    const observables = [this.roleService.list(), this.settingsService.getStandardSettings()];
     observableForkJoin(observables).subscribe(
       (result: [UserFormRoleModel[], CdPwdExpirationSettings]) => {
         this.allRoles = _.map(result[0], (role) => {
@@ -140,6 +151,8 @@ export class UserFormComponent implements OnInit {
             pwdExpirationDateField.setValue(expirationDate);
             pwdExpirationDateField.setValidators([Validators.required]);
           }
+
+          this.loadingReady();
         }
       }
     );
@@ -152,6 +165,8 @@ export class UserFormComponent implements OnInit {
       this.userService.get(username).subscribe((userFormModel: UserFormModel) => {
         this.response = _.cloneDeep(userFormModel);
         this.setResponse(userFormModel);
+
+        this.loadingReady();
       });
     });
   }
@@ -161,7 +176,7 @@ export class UserFormComponent implements OnInit {
   }
 
   setResponse(response: UserFormModel) {
-    ['username', 'name', 'email', 'roles', 'enabled'].forEach((key) =>
+    ['username', 'name', 'email', 'roles', 'enabled', 'pwdUpdateRequired'].forEach((key) =>
       this.userForm.get(key).setValue(response[key])
     );
     const expirationDate = response['pwdExpirationDate'];
@@ -172,7 +187,7 @@ export class UserFormComponent implements OnInit {
 
   getRequest(): UserFormModel {
     const userFormModel = new UserFormModel();
-    ['username', 'password', 'name', 'email', 'roles', 'enabled'].forEach(
+    ['username', 'password', 'name', 'email', 'roles', 'enabled', 'pwdUpdateRequired'].forEach(
       (key) => (userFormModel[key] = this.userForm.get(key).value)
     );
     const expirationDate = this.userForm.get('pwdExpirationDate').value;
@@ -223,22 +238,6 @@ export class UserFormComponent implements OnInit {
     } else {
       this.doEditAction();
     }
-  }
-
-  checkPassword(password: string) {
-    [
-      this.passwordStrengthLevel,
-      this.passwordStrengthDescription
-    ] = this.userChangePasswordService.checkPasswordComplexity(password);
-    return password && this.passwordStrengthLevel === 'passwordStrengthLevel0';
-  }
-
-  showExpirationDateField() {
-    return (
-      this.userForm.getValue('pwdExpirationDate') > 0 ||
-      this.userForm.touched ||
-      this.pwdExpirationSettings.pwdExpirationSpan > 0
-    );
   }
 
   public isCurrentUser(): boolean {

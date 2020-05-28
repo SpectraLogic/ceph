@@ -25,6 +25,7 @@ public:
     
     topic_name = s->object.name;
 
+    opaque_data = s->info.args.get("OpaqueData");
     dest.push_endpoint = s->info.args.get("push-endpoint");
     
     if (!validate_and_update_endpoint_secret(dest, s->cct, *(s->info.env))) {
@@ -39,7 +40,7 @@ public:
     // the topic ARN will be sent in the reply
     const rgw::ARN arn(rgw::Partition::aws, rgw::Service::sns, 
         store->svc()->zone->get_zonegroup().get_name(),
-        s->user->user_id.tenant, topic_name);
+        s->user->get_tenant(), topic_name);
     topic_arn = arn.to_string();
     return 0;
   }

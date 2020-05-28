@@ -76,22 +76,6 @@ struct Replayer<I>::C_ReplayCommitted : public Context {
 };
 
 template <typename I>
-struct Replayer<I>::C_TrackedOp : public Context {
-  Replayer *replayer;
-  Context* ctx;
-
-  C_TrackedOp(Replayer* replayer, Context* ctx)
-    : replayer(replayer), ctx(ctx) {
-    replayer->m_in_flight_op_tracker.start_op();
-  }
-
-  void finish(int r) override {
-    ctx->complete(r);
-    replayer->m_in_flight_op_tracker.finish_op();
-  }
-};
-
-template <typename I>
 struct Replayer<I>::RemoteJournalerListener
   : public ::journal::JournalMetadataListener {
   Replayer* replayer;
@@ -99,9 +83,11 @@ struct Replayer<I>::RemoteJournalerListener
   RemoteJournalerListener(Replayer* replayer) : replayer(replayer) {}
 
   void handle_update(::journal::JournalMetadata*) override {
-    auto ctx = new C_TrackedOp(replayer, new LambdaContext([this](int r) {
-      replayer->handle_remote_journal_metadata_updated();
-    }));
+    auto ctx = new C_TrackedOp(
+      replayer->m_in_flight_op_tracker,
+      new LambdaContext([this](int r) {
+        replayer->handle_remote_journal_metadata_updated();
+      }));
     replayer->m_threads->work_queue->queue(ctx, 0);
   }
 };
@@ -240,14 +226,14 @@ void Replayer<I>::shut_down(Context* on_finish) {
 
   cancel_delayed_preprocess_task();
   cancel_flush_local_replay_task();
-  shut_down_local_journal_replay();
+  wait_for_event_replay();
 }
 
 template <typename I>
 void Replayer<I>::flush(Context* on_finish) {
   dout(10) << dendl;
 
-  flush_local_replay(new C_TrackedOp(this, on_finish));
+  flush_local_replay(new C_TrackedOp(m_in_flight_op_tracker, on_finish));
 }
 
 template <typename I>
@@ -264,7 +250,7 @@ bool Replayer<I>::get_replay_status(std::string* description,
     return false;
   }
 
-  on_finish = new C_TrackedOp(this, on_finish);
+  on_finish = new C_TrackedOp(m_in_flight_op_tracker, on_finish);
   return m_replay_status_formatter->get_or_send_update(description,
                                                        on_finish);
 }
@@ -419,11 +405,30 @@ bool Replayer<I>::notify_init_complete(std::unique_lock<ceph::mutex>& locker) {
 }
 
 template <typename I>
+void Replayer<I>::wait_for_event_replay() {
+  ceph_assert(ceph_mutex_is_locked_by_me(m_lock));
+
+  dout(10) << dendl;
+  auto ctx = create_async_context_callback(
+    m_threads->work_queue, create_context_callback<
+      Replayer<I>, &Replayer<I>::handle_wait_for_event_replay>(this));
+  m_event_replay_tracker.wait_for_ops(ctx);
+}
+
+template <typename I>
+void Replayer<I>::handle_wait_for_event_replay(int r) {
+  dout(10) << "r=" << r << dendl;
+
+  std::unique_lock locker{m_lock};
+  shut_down_local_journal_replay();
+}
+
+template <typename I>
 void Replayer<I>::shut_down_local_journal_replay() {
   ceph_assert(ceph_mutex_is_locked_by_me(m_lock));
 
   if (m_local_journal_replay == nullptr) {
-    wait_for_event_replay();
+    close_local_image();
     return;
   }
 
@@ -443,25 +448,6 @@ void Replayer<I>::handle_shut_down_local_journal_replay(int r) {
     handle_replay_error(r, "failed to shut down local journal replay");
   }
 
-  wait_for_event_replay();
-}
-
-template <typename I>
-void Replayer<I>::wait_for_event_replay() {
-  ceph_assert(ceph_mutex_is_locked_by_me(m_lock));
-
-  dout(10) << dendl;
-  auto ctx = create_async_context_callback(
-    m_threads->work_queue, create_context_callback<
-      Replayer<I>, &Replayer<I>::handle_wait_for_event_replay>(this));
-  m_event_replay_tracker.wait_for_ops(ctx);
-}
-
-template <typename I>
-void Replayer<I>::handle_wait_for_event_replay(int r) {
-  dout(10) << "r=" << r << dendl;
-
-  std::unique_lock locker{m_lock};
   close_local_image();
 }
 
@@ -1071,6 +1057,8 @@ void Replayer<I>::handle_process_entry_ready(int r) {
     }
   }
 
+  m_replay_status_formatter->handle_entry_processed(m_replay_bytes);
+
   if (update_status) {
     unregister_perf_counters();
     register_perf_counters();
@@ -1134,7 +1122,7 @@ void Replayer<I>::notify_status_updated() {
 
   dout(10) << dendl;
 
-  auto ctx = new C_TrackedOp(this, new LambdaContext(
+  auto ctx = new C_TrackedOp(m_in_flight_op_tracker, new LambdaContext(
     [this](int) {
       m_replayer_listener->handle_notification();
     }));
