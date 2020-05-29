@@ -4,6 +4,16 @@ def keepgoing = true
 def buildTest = JOB_NAME.contains("BuildTest")
 def signTest = params.PRODUCTION
 
+// XXX: 
+// The target ubuntu release is required for packaging.
+// If not set then the generated repo will be namee $(lsb_release -sc)
+// which for most build machines is "bionic", but this branch is
+// targeted for "focal"
+// 
+def getTargetOS() {
+    return 'focal'
+}
+
 def getPreviousStatus(build) {
     if (build == null) {
         return 'ABORTED'
@@ -71,7 +81,9 @@ pipeline {
 	SPECTRA_INFO = "spectra.build"
 	SPECTRA_INFO_PATH = "${env.ARTIFACTS_SRC_DIR}/${env.SPECTRA_INFO}"
 
-	ARTIFACTS_LIST = "bionic conf db dists pool ${env.SPECTRA_INFO}"
+	UBUNTU_CODENAME = getTargetOS()
+	
+	ARTIFACTS_LIST = "${env.UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
     }
     stages {
         stage('CheckCause') {
@@ -112,6 +124,7 @@ pipeline {
             steps {
                 sh "TMPDIR='${env.WORK_DIR}/tmp' JAVA_HOME='${env.JAVA_HOME}' " +
 	           "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' " +
+                   "UBUNTU_CODENAME='${env.UBUNTU_CODENAME}' " +
                    "./make-debs.sh '${env.WORK_DIR}'"
             }
         }
