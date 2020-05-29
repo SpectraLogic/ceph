@@ -119,7 +119,7 @@ pipeline {
 	stage('Build Info') {
             when { expression { keepgoing } }
             steps {
-                sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '${env.BUILD_NUMBER}' '${env.ARTIFACTS_LIST}'"
+                sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '${env.BRANCH_NAME}' '${env.BUILD_NUMBER}' '${env.ARTIFACTS_LIST}'"
             }
         }
 
