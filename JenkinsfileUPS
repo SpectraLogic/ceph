@@ -56,6 +56,7 @@ pipeline {
         string(defaultValue: '/scratch/packages/ceph', description: 'Path to archive packages, branch added ' +
                 'automatically', name: 'BUILD_PKG_ROOT')
     }
+
     environment {
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
@@ -67,19 +68,20 @@ pipeline {
 	// which for most build machines is "bionic", but this branch is
 	// targeted for "focal"
 	//
-        UBUNTU_CODENAME = 'focal'
-        def DATE = sh(script: "date '+%F-%T'", returnStdout: true).trim()
-        def VERSION = sh(script: "git describe", returnStdout: true).trim()
+	UBUNTU_CODENAME = 'focal'
+	def DATE = sh(script: "date '+%F-%T'", returnStdout: true).trim()
+	def VERSION = sh(script: "git describe", returnStdout: true).trim()
 
-        ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
-        ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
-        ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/${env.BRANCH_NAME}-$VERSION-repo.${env.BUILD_NUMBER}.tgz"
+	ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
+	ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
+	ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/${env.BRANCH_NAME}-${VERSION}-repo.${env.BUILD_NUMBER}.tgz"
 
-	SPECTRA_INFO = "spectra-${env.VERSION}-$DATE.build"
+	SPECTRA_INFO = "spectra-${VERSION}-${DATE}.build"
 	SPECTRA_INFO_PATH = "${env.ARTIFACTS_SRC_DIR}/${env.SPECTRA_INFO}"
 	
 	ARTIFACTS_LIST = "${env.UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
     }
+
     stages {
         stage('CheckCause') {
             when {
