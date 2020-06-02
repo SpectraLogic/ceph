@@ -4,15 +4,6 @@ def keepgoing = true
 def buildTest = JOB_NAME.contains("BuildTest")
 def signTest = params.PRODUCTION
 
-// XXX: 
-// The target ubuntu release is required for packaging.
-// If not set then the generated repo will be namee $(lsb_release -sc)
-// which for most build machines is "bionic", but this branch is
-// targeted for "focal"
-// 
-def getTargetOS() {
-    return 'focal'
-}
 
 def getPreviousStatus(build) {
     if (build == null) {
@@ -56,14 +47,10 @@ def sendNotification(color, buildStatus) {
 pipeline {
     agent { label "UPSTREAM" }
 
-    // START_JENKINSFILE_PIPELINE_SPECIFIC
-    // Note: see bin/jf_to_jbt
-    //
     options {
         buildDiscarder(logRotator(daysToKeepStr: '30', artifactNumToKeepStr: '2'))
         disableConcurrentBuilds()
     }
-    // END_JENKINSFILE_PIPELINE_SPECIFIC
 
     parameters {
         string(defaultValue: '/scratch/packages/ceph', description: 'Path to archive packages, branch added ' +
@@ -74,14 +61,22 @@ pipeline {
 	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
 	JAWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/jawt.h"
 
-	ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
-	ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
-	ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/ceph_deb_repo.${env.BUILD_NUMBER}.tgz"
+	// XXX: 
+	// The target Ubuntu release is required for packaging.
+	// If not set then the generated repo will be named $(lsb_release -sc)
+	// which for most build machines is "bionic", but this branch is
+	// targeted for "focal"
+	//
+        UBUNTU_CODENAME = 'focal'
+        def DATE = sh(script: "date '+%F-%T'", returnStdout: true).trim()
+        def VERSION = sh(script: "git describe", returnStdout: true).trim()
 
-	SPECTRA_INFO = "spectra.build"
+        ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
+        ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
+        ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/${env.BRANCH_NAME}-$VERSION-repo.${env.BUILD_NUMBER}.tgz"
+
+	SPECTRA_INFO = "spectra-${env.VERSION}-$DATE.build"
 	SPECTRA_INFO_PATH = "${env.ARTIFACTS_SRC_DIR}/${env.SPECTRA_INFO}"
-
-	UBUNTU_CODENAME = getTargetOS()
 	
 	ARTIFACTS_LIST = "${env.UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
     }
