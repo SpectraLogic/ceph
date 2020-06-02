@@ -808,9 +808,9 @@ public:
       read_flags = 0;
       auto read_policy = config.get_val<std::string>("rbd_read_from_replica_policy");
       if (read_policy == "balance") {
-        read_flags |= CEPH_OSD_FLAG_BALANCE_READS;
+        read_flags |= librados::OPERATION_BALANCE_READS;
       } else if (read_policy == "localize") {
-        read_flags |= CEPH_OSD_FLAG_LOCALIZE_READS;
+        read_flags |= librados::OPERATION_LOCALIZE_READS;
       }
     }
 
@@ -820,27 +820,33 @@ public:
     io_image_dispatcher->apply_qos_limit(
       io::IMAGE_DISPATCH_FLAG_QOS_IOPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_iops_limit"),
-      config.get_val<uint64_t>("rbd_qos_iops_burst"));
+      config.get_val<uint64_t>("rbd_qos_iops_burst"),
+      config.get_val<uint64_t>("rbd_qos_iops_burst_seconds"));
     io_image_dispatcher->apply_qos_limit(
       io::IMAGE_DISPATCH_FLAG_QOS_BPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_bps_limit"),
-      config.get_val<uint64_t>("rbd_qos_bps_burst"));
+      config.get_val<uint64_t>("rbd_qos_bps_burst"),
+      config.get_val<uint64_t>("rbd_qos_bps_burst_seconds"));
     io_image_dispatcher->apply_qos_limit(
       io::IMAGE_DISPATCH_FLAG_QOS_READ_IOPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_read_iops_limit"),
-      config.get_val<uint64_t>("rbd_qos_read_iops_burst"));
+      config.get_val<uint64_t>("rbd_qos_read_iops_burst"),
+      config.get_val<uint64_t>("rbd_qos_read_iops_burst_seconds"));
     io_image_dispatcher->apply_qos_limit(
       io::IMAGE_DISPATCH_FLAG_QOS_WRITE_IOPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_write_iops_limit"),
-      config.get_val<uint64_t>("rbd_qos_write_iops_burst"));
+      config.get_val<uint64_t>("rbd_qos_write_iops_burst"),
+      config.get_val<uint64_t>("rbd_qos_write_iops_burst_seconds"));
     io_image_dispatcher->apply_qos_limit(
       io::IMAGE_DISPATCH_FLAG_QOS_READ_BPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_read_bps_limit"),
-      config.get_val<uint64_t>("rbd_qos_read_bps_burst"));
+      config.get_val<uint64_t>("rbd_qos_read_bps_burst"),
+      config.get_val<uint64_t>("rbd_qos_read_bps_burst_seconds"));
     io_image_dispatcher->apply_qos_limit(
       io::IMAGE_DISPATCH_FLAG_QOS_WRITE_BPS_THROTTLE,
       config.get_val<uint64_t>("rbd_qos_write_bps_limit"),
-      config.get_val<uint64_t>("rbd_qos_write_bps_burst"));
+      config.get_val<uint64_t>("rbd_qos_write_bps_burst"),
+      config.get_val<uint64_t>("rbd_qos_write_bps_burst_seconds"));
 
     if (!disable_zero_copy &&
         config.get_val<bool>("rbd_disable_zero_copy_writes")) {

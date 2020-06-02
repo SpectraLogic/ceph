@@ -4,6 +4,7 @@ Ceph cluster task, deployed via cephadm orchestrator
 import argparse
 import configobj
 import contextlib
+import errno
 import logging
 import os
 import json
@@ -1078,7 +1079,8 @@ def task(ctx, config):
         ctx.ceph[cluster_name].bootstrapped = False
  
     # image
-    ctx.ceph[cluster_name].image = config.get('image')
+    if not hasattr(ctx.ceph[cluster_name], 'image'):
+        ctx.ceph[cluster_name].image = config.get('image')
     ref = None
     if not ctx.ceph[cluster_name].image:
         sha1 = config.get('sha1')
@@ -1185,6 +1187,9 @@ def add_mirror_to_cluster(ctx, mirror):
                 path=registries_conf,
                 data=new_config,
             )
-        except FileNotFoundError as e:
+        except IOError as e:  # py3: use FileNotFoundError instead.
+            if e.errno != errno.ENOENT:
+                raise
+
             # Docker doesn't ship a registries.conf
             log.info('Failed to add mirror: %s' % str(e))
