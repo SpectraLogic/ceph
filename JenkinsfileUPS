@@ -2,7 +2,6 @@ final FAILURE = '#FF0000'
 
 def keepgoing = true
 def buildTest = JOB_NAME.contains("BuildTest")
-def signTest = params.PRODUCTION
 
 
 def getPreviousStatus(build) {
@@ -69,19 +68,17 @@ pipeline {
 	// targeted for "focal"
 	//
 	UBUNTU_CODENAME = 'focal'
-	def DATE = sh(script: "date '+%F-%T'", returnStdout: true).trim()
 	def VERSION = sh(script: "git describe", returnStdout: true).trim()
 
+	ARTIFACTS_NAME = "${env.BRANCH_NAME}-${VERSION}-${env.BUILD_NUMBER}"
 	ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
 	ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
-	ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/${env.BRANCH_NAME}-${VERSION}-repo.${env.BUILD_NUMBER}.tgz"
+	ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/${env.ARTIFACTS_NAME}.tgz"
 
-	SPECTRA_INFO = "spectra-${VERSION}-${DATE}.build"
+	SPECTRA_INFO = "${env.ARTIFACTS_NAME}.build"
 	SPECTRA_INFO_PATH = "${env.ARTIFACTS_SRC_DIR}/${env.SPECTRA_INFO}"
-	
 	ARTIFACTS_LIST = "${env.UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
     }
-
     stages {
         stage('CheckCause') {
             when {
@@ -129,7 +126,7 @@ pipeline {
 	stage('Build Info') {
             when { expression { keepgoing } }
             steps {
-                sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '${env.BRANCH_NAME}' '${env.BUILD_NUMBER}' '${env.ARTIFACTS_LIST}'"
+                sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACTS_LIST}'"
             }
         }
 
