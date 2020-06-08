@@ -7,7 +7,7 @@ OUTPUT="${1:-none}" # Output file is assumed to be in the artifacts directory
 BRANCH="${2:-none}" # Branch
 VERSION="${3:-none}" # Version from tag
 BLDNUM="${4:-none}"  # Jenkins build number
-shift 3
+shift 4
 ARTIFACTS="$@"		# Files and directories that are our "artifacts" relative to dirname $OUTPUT
 PFMT="%-15s %s\n"
 

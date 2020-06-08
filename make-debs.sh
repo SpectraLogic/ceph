@@ -17,12 +17,7 @@
 set -xe
 
 base=${1:-/tmp/release}
-if [ -n "$UBUNTU_CODENAME" ] 
-then
-	codename="$UBUNTU_CODENAME"
-else
-	codename=$(lsb_release -sc)
-fi
+codename=$(lsb_release -sc)
 releasedir=$base/$(lsb_release -si)/WORKDIR
 rm -fr $(dirname $releasedir)
 mkdir -p $releasedir
