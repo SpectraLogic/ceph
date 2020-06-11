@@ -110,7 +110,7 @@ pipeline {
         stage('OSversion') {
             when {
                 expression {
-                   return '${UBUNTU_CODENAME}' != '${branchCodeName}'
+                   return '${UBUNTU_CODENAME}' == '${branchCodeName}'
                 }
             }
             steps {
