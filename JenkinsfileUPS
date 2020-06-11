@@ -45,7 +45,7 @@ def sendNotification(color, buildStatus) {
 }
 
 pipeline {
-    agent { label "UPSTREAM" }
+    agent { label "UPSTREAM-20.04" }
 
     options {
         buildDiscarder(logRotator(daysToKeepStr: '30', artifactNumToKeepStr: '2'))
