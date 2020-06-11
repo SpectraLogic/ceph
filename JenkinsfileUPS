@@ -106,18 +106,26 @@ pipeline {
                 sh "sudo chmod -R 777 ${env.WORK_DIR}"
             }
         }
+	
+        stage('OSversion') {
+            when {
+                expression {
+                   return '${UBUNTU_CODENAME}' != '${branchCodeName}'
+                }
+            }
+            steps {
+                    error "build machine running  '${UBUNTU_CODENAME}', but require '${branchCodeName}'"
+            }
+        }
 
         stage('Dependencies') {
             when { expression { keepgoing } }
             steps {
-                if ("${UBUNTU_CODENAME}" != "${branchCodeName}") {
-                    error "build machine running  '${UBUNTU_CODENAME}', but require '${branchCodeName}'"
-                }
                 sh "./install-deps.sh"
             }
         }
 
-        stage('Build Ceph') {
+        stage('BuildCeph') {
             when { expression { keepgoing } }
             steps {
                 sh "TMPDIR='${env.WORK_DIR}/tmp' JAVA_HOME='${env.JAVA_HOME}' " +
@@ -126,7 +134,7 @@ pipeline {
             }
         }
 
-	stage('Build Info') {
+	stage('BuildInfo') {
             when { expression { keepgoing } }
             steps {
                 sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACTS_LIST}'"
