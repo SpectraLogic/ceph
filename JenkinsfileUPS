@@ -110,7 +110,7 @@ pipeline {
         stage('Dependencies') {
             when { expression { keepgoing } }
             steps {
-                if (${UBUNTU_CODENAME} != ${branchCodeName}) {
+                if ("${UBUNTU_CODENAME}" != "${branchCodeName}") {
                     error 'build machine running  ${UBUNTU_CODENAME}, but require ${branchCodeName}"
                 }
                 sh "./install-deps.sh"
