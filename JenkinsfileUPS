@@ -2,7 +2,7 @@ final FAILURE = '#FF0000'
 
 def keepgoing = true
 def buildTest = JOB_NAME.contains("BuildTest")
-def branchCodeName = "focal"
+def branchCodeName = 'focal'
 
 
 def getPreviousStatus(build) {
@@ -111,7 +111,7 @@ pipeline {
             when { expression { keepgoing } }
             steps {
                 if ("${UBUNTU_CODENAME}" != "${branchCodeName}") {
-                    error 'build machine running  ${UBUNTU_CODENAME}, but require ${branchCodeName}"
+                    error "build machine running  '${UBUNTU_CODENAME}', but require '${branchCodeName}'"
                 }
                 sh "./install-deps.sh"
             }
