@@ -53,12 +53,11 @@ pipeline {
     }
 
     parameters {
-        string(defaultValue: '/scratch/packages/ceph', description: 'Path to archive packages, branch added ' +
-                'automatically', name: 'BUILD_PKG_ROOT')
+        string(defaultValue: '/scratch/www/local/ceph', description: 'Path to package repo server ' +
+                'branch added automatically', name: 'WWW_ROOT')
     }
 
     environment {
-	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}_branch"
 	JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
 	JAWT_INCLUDE_PATH = "/usr/lib/jvm/java-11-openjdk-amd64/include/jawt.h"
 
@@ -71,14 +70,22 @@ pipeline {
 	def UBUNTU_CODENAME = sh(script: "lsb_release -sc", returnStdout: true).trim()
 	def VERSION = sh(script: "git describe", returnStdout: true).trim()
 
-	ARTIFACTS_NAME = "${env.BRANCH_NAME}-${VERSION}-${env.BUILD_NUMBER}"
-	ARTIFACTS_SRC_DIR = "${env.WORK_DIR}/Ubuntu"
-	ARTIFACTS_DST_DIR = "${params.BUILD_PKG_ROOT}/${env.BRANCH_NAME}"
-	ARTIFACTS_TAR = "${env.ARTIFACTS_DST_DIR}/${env.ARTIFACTS_NAME}.tgz"
+        RELEASE_NAME = "${env.BRANCH_NAME}-${VERSION}-${env.BUILD_NUMBER}"
+	SPECTRA_INFO = "${env.RELEASE_NAME}.build"
 
-	SPECTRA_INFO = "${env.ARTIFACTS_NAME}.build"
-	SPECTRA_INFO_PATH = "${env.ARTIFACTS_SRC_DIR}/${env.SPECTRA_INFO}"
-	ARTIFACTS_LIST = "${UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
+	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}"
+
+	// The build deposits packages and repo under:
+	BUILD_ARTIFACT_DIR = "${env.WORK_DIR}/Ubuntu"
+
+	// Artifacts that comprise the apt repo relative
+	// to BUILD_ARTIFACT_DIR:
+	ARTIFACT_LIST = "${UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
+
+	// Distribute the generated reopo to:
+        WWW_DIST_DIR = "${params.WWW_ROOT}/${env.BRANCH_NAME}"
+	WWW_DIST_REL_DIR = "${env.WWW_DIST_DIR}/${env.RELEASE_NAME}"
+        WWW_TOKEEP = "11"
     }
     stages {
         stage('CheckCause') {
@@ -137,18 +144,33 @@ pipeline {
 	stage('BuildInfo') {
             when { expression { keepgoing } }
             steps {
-                sh "./spectra-buildinfo.sh '${env.SPECTRA_INFO_PATH}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACTS_LIST}'"
+                sh "./spectra-buildinfo.sh '{env.BUILD_ARTIFACT_DIR}/${env.SPECTRA_INFO}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACT_LIST}'"
             }
         }
 
         stage('Archive') {
             when { expression { keepgoing && !buildTest } }
             steps {
-                sh "sudo mkdir -pm 777 ${env.ARTIFACTS_DST_DIR}/ || true"
-		sh "sudo tar -czvf ${env.ARTIFACTS_TAR} -C ${env.ARTIFACTS_SRC_DIR} ${env.ARTIFACTS_LIST}"
-		sh "sudo chmod 666 ${env.ARTIFACTS_TAR}"
+                sh "sudo mkdir -pm 777 ${env.WWW_DIST_DIR}/ || true"
+                sh "sudo mkdir -m 777 ${env.WWW_DIST_REL_DIR}"
+                sh "sudo tar -cf - -C ${env.WORK_DIR} ${env.ARTIFACT_LIST} | tar -xvf - -C ${env.WWW_DIST_REL_DIR}"
+
+                dir("${WWW_DST_DIR}") {
+                    sh "ln -sf ${env.RELEASE_NAME} latest"
+                    sh "echo ${env.RELEASE_NAME} > latest.txt"
+                    sh "sudo chmod 666 latest.txt"
+                }
+                sh "sudo rm -fr ${env.WWW_DST_DIR}@tmp"
             }
         }
+
+        stage('ReleasePrune') {
+            when { expression { keepgoing && !buildTest } }
+            steps {
+                sh "sudo ls -1t ${env.WWWW_DST_DIR}/ceph-* | tail -n +${env.WWW_TOKEEP} | xargs rm -fr"
+            }
+        }
+
 
         stage('PostClean') {
             when { expression { keepgoing } }
