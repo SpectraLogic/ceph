@@ -65,27 +65,27 @@ pipeline {
 	// The target Ubuntu release is required for packaging.
 	// If not set then the generated repo will be named $(lsb_release -sc)
 	// which for most build machines is "bionic", but this branch is
-	// targeted for "focal"
+	// targeted for "focal". See stage OSversion{}
 	//
 	def UBUNTU_CODENAME = sh(script: "lsb_release -sc", returnStdout: true).trim()
 	def VERSION = sh(script: "git describe", returnStdout: true).trim()
 
-        RELEASE_NAME = "${env.BRANCH_NAME}-${VERSION}-${env.BUILD_NUMBER}"
+        RELEASE_PREFIX = "ceph-${env.BRANCH_NAME}"
+        RELEASE_NAME = "${env.RELEASE_PREFIX}-${VERSION}-${env.BUILD_NUMBER}"
 	SPECTRA_INFO = "${env.RELEASE_NAME}.build"
-
 	WORK_DIR = "/tmp/ceph_work/${env.BRANCH_NAME}"
 
 	// The build deposits packages and repo under:
 	BUILD_ARTIFACT_DIR = "${env.WORK_DIR}/Ubuntu"
 
-	// Artifacts that comprise the apt repo relative
-	// to BUILD_ARTIFACT_DIR:
+	// Artifacts that comprise the apt repo relative to BUILD_ARTIFACT_DIR:
 	ARTIFACT_LIST = "${UBUNTU_CODENAME} conf db dists pool ${env.SPECTRA_INFO}"
 
-	// Distribute the generated reopo to:
+	// Distribute the generated repo to WWW_DIST_DIR
+	// under a directory named WWW_DIST_REL_DIR
         WWW_DIST_DIR = "${params.WWW_ROOT}/${env.BRANCH_NAME}"
 	WWW_DIST_REL_DIR = "${env.WWW_DIST_DIR}/${env.RELEASE_NAME}"
-        WWW_TOKEEP = "11"
+        WWW_TOKEEP = "11" // +1 actual number kept
     }
     stages {
         stage('CheckCause') {
@@ -104,15 +104,15 @@ pipeline {
             }
         }
 
-        stage('Clean') {
-            when { expression { keepgoing } }
-            steps {
-                sh "sudo rm -fr ${env.WORK_DIR}/*"
-		sh "sudo git clean -xdf"
-                sh "sudo mkdir -p ${env.WORK_DIR}/tmp"
-                sh "sudo chmod -R 777 ${env.WORK_DIR}"
-            }
-        }
+        //stage('Clean') {
+        //    when { expression { keepgoing } }
+        //    steps {
+        //        sh "sudo rm -fr ${env.WORK_DIR}/*"
+        //        sh "sudo git clean -xdf"
+        //        sh "sudo mkdir -p ${env.WORK_DIR}/tmp"
+        //        sh "sudo chmod -R 777 ${env.WORK_DIR}"
+        //    }
+        //}
 	
         stage('OSversion') {
             when {
@@ -125,26 +125,26 @@ pipeline {
             }
         }
 
-        stage('Dependencies') {
-            when { expression { keepgoing } }
-            steps {
-                sh "./install-deps.sh"
-            }
-        }
+      //  stage('Dependencies') {
+      //      when { expression { keepgoing } }
+      //      steps {
+      //          sh "./install-deps.sh"
+      //      }
+      //  }
 
-        stage('BuildCeph') {
-            when { expression { keepgoing } }
-            steps {
-                sh "TMPDIR='${env.WORK_DIR}/tmp' JAVA_HOME='${env.JAVA_HOME}' " +
-	           "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' " +
-                   "./make-debs.sh '${env.WORK_DIR}'"
-            }
-        }
+      //  stage('BuildCeph') {
+      //      when { expression { keepgoing } }
+      //      steps {
+      //          sh "TMPDIR='${env.WORK_DIR}/tmp' JAVA_HOME='${env.JAVA_HOME}' " +
+      //         "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' " +
+      //             "./make-debs.sh '${env.WORK_DIR}'"
+      //      }
+      //  }
 
-	stage('BuildInfo') {
+        stage('BuildInfo') {
             when { expression { keepgoing } }
             steps {
-                sh "./spectra-buildinfo.sh '{env.BUILD_ARTIFACT_DIR}/${env.SPECTRA_INFO}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACT_LIST}'"
+                sh "./spectra-buildinfo.sh '${env.BUILD_ARTIFACT_DIR}/${env.SPECTRA_INFO}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACT_LIST}'"
             }
         }
 
@@ -153,31 +153,32 @@ pipeline {
             steps {
                 sh "sudo mkdir -pm 777 ${env.WWW_DIST_DIR}/ || true"
                 sh "sudo mkdir -m 777 ${env.WWW_DIST_REL_DIR}"
-                sh "sudo tar -cf - -C ${env.WORK_DIR} ${env.ARTIFACT_LIST} | tar -xvf - -C ${env.WWW_DIST_REL_DIR}"
+                sh "sudo tar -cf - -C ${env.BUILD_ARTIFACT_DIR} ${env.ARTIFACT_LIST} | tar -xvf - -C ${env.WWW_DIST_REL_DIR}"
 
-                dir("${WWW_DST_DIR}") {
-                    sh "ln -sf ${env.RELEASE_NAME} latest"
-                    sh "echo ${env.RELEASE_NAME} > latest.txt"
+                dir("${WWW_DIST_DIR}") {
+                    sh "sudo rm -f latest*"
+                    sh "sudo ln -s ${env.RELEASE_NAME} latest"
+                    sh "sudo echo ${env.RELEASE_NAME} > latest.txt"
                     sh "sudo chmod 666 latest.txt"
                 }
-                sh "sudo rm -fr ${env.WWW_DST_DIR}@tmp"
+                sh "sudo rm -fr ${env.WWW_DIST_DIR}@tmp"
             }
         }
 
         stage('ReleasePrune') {
             when { expression { keepgoing && !buildTest } }
             steps {
-                sh "sudo ls -1t ${env.WWWW_DST_DIR}/ceph-* | tail -n +${env.WWW_TOKEEP} | xargs rm -fr"
+                sh "sudo ls -1t ${env.WWW_DIST_DIR}/${env.RELEASE_PREFIX}* | tail -n +${env.WWW_TOKEEP} | xargs rm -fr"
             }
         }
 
 
-        stage('PostClean') {
-            when { expression { keepgoing } }
-            steps {
-                sh "sudo rm -fr ${env.WORK_DIR}/*"
-            }
-        }
+        //stage('PostClean') {
+        //    when { expression { keepgoing } }
+        //    steps {
+        //        sh "sudo rm -fr ${env.WORK_DIR}/*"
+        //    }
+        //}
     }
 
     post {
