@@ -1,7 +1,6 @@
 final FAILURE = '#FF0000'
 
 def keepgoing = true
-def buildTest = JOB_NAME.contains("BuildTest")
 def branchCodeName = 'focal'
 
 
@@ -91,7 +90,6 @@ pipeline {
         stage('CheckCause') {
             when {
                 expression {
-                    buildTest &&
                     "${currentBuild.getBuildCauses('jenkins.branch.BranchEventCause').size()}" != "0"
                 }
             }
@@ -149,7 +147,7 @@ pipeline {
         }
 
         stage('Archive') {
-            when { expression { keepgoing && !buildTest } }
+            when { expression { keepgoing } }
             steps {
                 sh "sudo mkdir -pm 777 ${env.WWW_DIST_DIR}/ || true"
                 sh "sudo mkdir -m 777 ${env.WWW_DIST_REL_DIR}"
@@ -166,7 +164,7 @@ pipeline {
         }
 
         stage('ReleasePrune') {
-            when { expression { keepgoing && !buildTest } }
+            when { expression { keepgoing } }
             steps {
                 sh "sudo ls -1t ${env.WWW_DIST_DIR}/${env.RELEASE_PREFIX}* | tail -n +${env.WWW_TOKEEP} | xargs rm -fr"
             }
