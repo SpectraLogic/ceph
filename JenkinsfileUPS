@@ -1,46 +1,11 @@
 final FAILURE = '#FF0000'
 
-def keepgoing = true
 def branchCodeName = 'focal'
 
-
-def getPreviousStatus(build) {
-    if (build == null) {
-        return 'ABORTED'
+def triggerOS() {
+    if (params.OS_TRIGGER_BRANCH != 'NONE') {
+	sh "${env.OS_TRIGGER}"
     }
-    if (build.result != null && build.result != 'ABORTED') {
-        return build.result
-    }
-    return getPreviousStatus(build.getPreviousBuild())
-}
-
-def notifyStatusChange(buildStatus) {
-    final UNKNOWN  = '#0000FF'
-    final SUCCESS  = '#00FF00'
-    final UNSTABLE = '#FFFF00'
-
-    def color = UNKNOWN
-
-    switch (buildStatus) {
-        case 'SUCCESS':
-            color = SUCCESS
-            break
-
-        case 'UNSTABLE':
-            color = UNSTABLE
-            break
-    }
-
-    // Notification already happened if 'FAILURE'. We don't care about canceled builds
-    def prevStatus = getPreviousStatus(currentBuild.getPreviousBuild())
-    if (buildStatus != prevStatus && buildStatus != 'FAILURE' && buildStatus != 'ABORTED' && prevStatus != 'ABORTED') {
-        echo "Status notifcation (previous, current): ${prevStatus}, ${buildStatus}"
-        sendNotification(color, buildStatus)
-    }
-}
-
-def sendNotification(color, buildStatus) {
-    slackSend(color: color, message: buildStatus + ": ${env.JOB_NAME} [${env.BUILD_NUMBER}] (<${env.BUILD_URL}|open>)")
 }
 
 pipeline {
@@ -54,6 +19,10 @@ pipeline {
     parameters {
         string(defaultValue: '/scratch/www/local/ceph', description: 'Path to package repo server ' +
                 'branch added automatically', name: 'WWW_ROOT')
+
+        string(defaultValue: 'master', description: 'Trigger a vailOS build on the specfied branch after a ' +
+                'sucessful ceph-ansible build; specify NONE to skip trigger',
+                name: 'OS_TRIGGER_BRANCH')
     }
 
     environment {
@@ -85,25 +54,14 @@ pipeline {
         WWW_DIST_DIR = "${params.WWW_ROOT}/${env.BRANCH_NAME}"
 	WWW_DIST_REL_DIR = "${env.WWW_DIST_DIR}/${env.RELEASE_NAME}"
         WWW_TOKEEP = "11" // +1 actual number kept
+
+        TRIGGER_USER = "spectra:11f97b22834dd601a1b7758c82e4233cc4"
+        OS_TRIGGER="curl -X POST http://${env.TRIGGER_USER}@jenkins-master2.eng.sldomain.com/" +
+            "job/SpectraLogic%20GitHub/job/vail_os/job/" +
+            "${params.OS_TRIGGER_BRANCH}/buildWithParameters?BUILD_TRIGGER=Ceph-${env.BRANCH_NAME}"
     }
     stages {
-        stage('CheckCause') {
-            when {
-                expression {
-                    "${currentBuild.getBuildCauses('jenkins.branch.BranchEventCause').size()}" != "0"
-                }
-            }
-            steps {
-                script {
-                    currentBuild.result = 'ABORTED'
-                    keepgoing = false
-                    echo "Skipping build caused by: ${currentBuild.getBuildCauses()[0].shortDescription}"
-                }
-            }
-        }
-
         stage('Clean') {
-            when { expression { keepgoing } }
             steps {
                 sh "sudo rm -fr ${env.WORK_DIR}/*"
                 sh "sudo git clean -xdf"
@@ -124,14 +82,12 @@ pipeline {
         }
 
         stage('Dependencies') {
-            when { expression { keepgoing } }
             steps {
                 sh "./install-deps.sh"
             }
         }
 
         stage('BuildCeph') {
-            when { expression { keepgoing } }
             steps {
                 sh "TMPDIR='${env.WORK_DIR}/tmp' JAVA_HOME='${env.JAVA_HOME}' " +
                "JAWT_INCLUDE_PATH='${JAWT_INCLUDE_PATH}' " +
@@ -140,14 +96,12 @@ pipeline {
         }
 
         stage('BuildInfo') {
-            when { expression { keepgoing } }
             steps {
                 sh "./spectra-buildinfo.sh '${env.BUILD_ARTIFACT_DIR}/${env.SPECTRA_INFO}' '${env.BRANCH_NAME}' '${VERSION}' '${env.BUILD_NUMBER}' '${env.ARTIFACT_LIST}'"
             }
         }
 
         stage('Archive') {
-            when { expression { keepgoing } }
             steps {
                 sh "sudo mkdir -pm 777 ${env.WWW_DIST_DIR}/ || true"
                 sh "sudo mkdir -m 777 ${env.WWW_DIST_REL_DIR}"
@@ -164,15 +118,12 @@ pipeline {
         }
 
         stage('ReleasePrune') {
-            when { expression { keepgoing } }
             steps {
                 sh "sudo ls -1t ${env.WWW_DIST_DIR}/${env.RELEASE_PREFIX}* | tail -n +${env.WWW_TOKEEP} | xargs rm -fr"
             }
         }
 
-
         stage('PostClean') {
-            when { expression { keepgoing } }
             steps {
                 sh "sudo rm -fr ${env.WORK_DIR}"
             }
@@ -181,10 +132,7 @@ pipeline {
 
     post {
         success {
-            notifyStatusChange(currentBuild.currentResult)
-        }
-        failure {
-            sendNotification(FAILURE, currentBuild.currentResult)
+		triggerOS()
         }
     }
 }
