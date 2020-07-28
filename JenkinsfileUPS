@@ -110,6 +110,7 @@ pipeline {
                 dir("${WWW_DIST_DIR}") {
                     sh "sudo rm -f latest*"
                     sh "sudo ln -s ${env.RELEASE_NAME} latest"
+                    sh "sudo ln -s latest/${env.SPECTRA_INFO} latest.build"
                     sh "sudo echo ${env.RELEASE_NAME} > latest.txt"
                     sh "sudo chmod 666 latest.txt"
                 }
