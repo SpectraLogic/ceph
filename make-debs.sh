@@ -79,6 +79,7 @@ cat > $codename/conf/distributions <<EOF
 Codename: $codename
 Suite: stable
 Components: main
+Origin: spectra
 Architectures: $(dpkg --print-architecture) source
 EOF
 if [ ! -e conf ]; then
