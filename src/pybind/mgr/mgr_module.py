@@ -1089,7 +1089,7 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
 
         r = HandleCommandResult(*self.mon_command(cmd_dict))
         if r.retval:
-            raise MonCommandFailed(f'{cmd_dict["prefix"]} failed: {r.stderr}')
+            raise MonCommandFailed(f'{cmd_dict["prefix"]} failed: {r.stderr} retval: {r.retval}')
         return r
 
     def mon_command(self, cmd_dict):
@@ -1400,7 +1400,7 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
 
                 schema = self.get_perf_schema(service['type'], service['id'])
                 if not schema:
-                    self.log.warn("No perf counter schema for {0}.{1}".format(
+                    self.log.warning("No perf counter schema for {0}.{1}".format(
                         service['type'], service['id']
                     ))
                     continue

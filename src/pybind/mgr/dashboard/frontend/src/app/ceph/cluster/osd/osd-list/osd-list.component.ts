@@ -1,4 +1,5 @@
 import { Component, OnInit, TemplateRef, ViewChild } from '@angular/core';
+import { FormControl } from '@angular/forms';
 import { Router } from '@angular/router';
 
 import { I18n } from '@ngx-translate/i18n-polyfill';
@@ -7,6 +8,7 @@ import { BsModalRef, BsModalService } from 'ngx-bootstrap/modal';
 import { forkJoin as observableForkJoin, Observable } from 'rxjs';
 
 import { OsdService } from '../../../../shared/api/osd.service';
+import { ListWithDetails } from '../../../../shared/classes/list-with-details.class';
 import { ConfirmationModalComponent } from '../../../../shared/components/confirmation-modal/confirmation-modal.component';
 import { CriticalConfirmationModalComponent } from '../../../../shared/components/critical-confirmation-modal/critical-confirmation-modal.component';
 import { FormModalComponent } from '../../../../shared/components/form-modal/form-modal.component';
@@ -15,6 +17,7 @@ import { TableComponent } from '../../../../shared/datatable/table/table.compone
 import { CellTemplate } from '../../../../shared/enum/cell-template.enum';
 import { Icons } from '../../../../shared/enum/icons.enum';
 import { NotificationType } from '../../../../shared/enum/notification-type.enum';
+import { CdFormGroup } from '../../../../shared/forms/cd-form-group';
 import { CdTableAction } from '../../../../shared/models/cd-table-action';
 import { CdTableColumn } from '../../../../shared/models/cd-table-column';
 import { CdTableSelection } from '../../../../shared/models/cd-table-selection';
@@ -40,7 +43,7 @@ const BASE_URL = 'osd';
   styleUrls: ['./osd-list.component.scss'],
   providers: [{ provide: URLBuilderService, useValue: new URLBuilderService(BASE_URL) }]
 })
-export class OsdListComponent implements OnInit {
+export class OsdListComponent extends ListWithDetails implements OnInit {
   @ViewChild('osdUsageTpl', { static: true })
   osdUsageTpl: TemplateRef<any>;
   @ViewChild('markOsdConfirmationTpl', { static: true })
@@ -53,6 +56,8 @@ export class OsdListComponent implements OnInit {
   reweightBodyTpl: TemplateRef<any>;
   @ViewChild('safeToDestroyBodyTpl', { static: false })
   safeToDestroyBodyTpl: TemplateRef<any>;
+  @ViewChild('deleteOsdExtraTpl', { static: false })
+  deleteOsdExtraTpl: TemplateRef<any>;
 
   permissions: Permissions;
   tableActions: CdTableAction[];
@@ -89,6 +94,7 @@ export class OsdListComponent implements OnInit {
     public actionLabels: ActionLabelsI18n,
     public notificationService: NotificationService
   ) {
+    super();
     this.permissions = this.authStorageService.getPermissions();
     this.tableActions = [
       {
@@ -215,33 +221,7 @@ export class OsdListComponent implements OnInit {
       {
         name: this.actionLabels.DELETE,
         permission: 'delete',
-        click: () => {
-          this.depCheckerService.checkOrchestratorOrModal(
-            this.actionLabels.DELETE,
-            this.i18n('OSD'),
-            () => {
-              this.showCriticalConfirmationModal(
-                this.i18n('delete'),
-                this.i18n('OSD'),
-                this.i18n('deleted'),
-                (ids: number[]) => {
-                  return this.osdService.safeToDelete(JSON.stringify(ids));
-                },
-                'is_safe_to_delete',
-                (id: number) => {
-                  this.selection = new CdTableSelection();
-                  return this.taskWrapper.wrapTaskAroundCall({
-                    task: new FinishedTask('osd/' + URLVerbs.DELETE, {
-                      svc_id: id
-                    }),
-                    call: this.osdService.delete(id, true)
-                  });
-                },
-                true
-              );
-            }
-          );
-        },
+        click: () => this.delete(),
         disable: () => !this.hasOsdSelected,
         icon: Icons.destroy
       }
@@ -472,6 +452,40 @@ export class OsdListComponent implements OnInit {
     });
   }
 
+  delete() {
+    const deleteFormGroup = new CdFormGroup({
+      preserve: new FormControl(false)
+    });
+
+    this.depCheckerService.checkOrchestratorOrModal(
+      this.actionLabels.DELETE,
+      this.i18n('OSD'),
+      () => {
+        this.showCriticalConfirmationModal(
+          this.i18n('delete'),
+          this.i18n('OSD'),
+          this.i18n('deleted'),
+          (ids: number[]) => {
+            return this.osdService.safeToDelete(JSON.stringify(ids));
+          },
+          'is_safe_to_delete',
+          (id: number) => {
+            this.selection = new CdTableSelection();
+            return this.taskWrapper.wrapTaskAroundCall({
+              task: new FinishedTask('osd/' + URLVerbs.DELETE, {
+                svc_id: id
+              }),
+              call: this.osdService.delete(id, deleteFormGroup.value.preserve, true)
+            });
+          },
+          true,
+          deleteFormGroup,
+          this.deleteOsdExtraTpl
+        );
+      }
+    );
+  }
+
   /**
    * Perform check first and display a critical confirmation modal.
    * @param {string} actionDescription name of the action.
@@ -480,8 +494,9 @@ export class OsdListComponent implements OnInit {
    * @param {Function} check the function is called to check if the action is safe.
    * @param {string} checkKey the safe indicator's key in the check response.
    * @param {Function} action the action function.
-   * @param {boolean} oneshot if true, action function is called with all items as parameter.
-   *   Otherwise, multiple action functions with individual items are sent.
+   * @param {boolean} taskWrapped if true, hide confirmation modal after action
+   * @param {CdFormGroup} childFormGroup additional child form group to be passed to confirmation modal
+   * @param {TemplateRef<any>} childFormGroupTemplate template for additional child form group
    */
   showCriticalConfirmationModal(
     actionDescription: string,
@@ -490,7 +505,9 @@ export class OsdListComponent implements OnInit {
     check: (ids: number[]) => Observable<any>,
     checkKey: string,
     action: (id: number | number[]) => Observable<any>,
-    taskWrapped: boolean = false
+    taskWrapped: boolean = false,
+    childFormGroup?: CdFormGroup,
+    childFormGroupTemplate?: TemplateRef<any>
   ): void {
     check(this.getSelectedOsdIds()).subscribe((result) => {
       const modalRef = this.modalService.show(CriticalConfirmationModalComponent, {
@@ -501,8 +518,11 @@ export class OsdListComponent implements OnInit {
           bodyContext: {
             safeToPerform: result[checkKey],
             message: result.message,
-            actionDescription: templateItemDescription
+            actionDescription: templateItemDescription,
+            osdIds: this.getSelectedOsdIds()
           },
+          childFormGroup: childFormGroup,
+          childFormGroupTemplate: childFormGroupTemplate,
           submitAction: () => {
             const observable = observableForkJoin(
               this.getSelectedOsdIds().map((osd: any) => action.call(this.osdService, osd))

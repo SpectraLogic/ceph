@@ -5,6 +5,7 @@ import * as _ from 'lodash';
 import { BsModalRef, BsModalService } from 'ngx-bootstrap/modal';
 
 import { RbdService } from '../../../shared/api/rbd.service';
+import { ListWithDetails } from '../../../shared/classes/list-with-details.class';
 import { ConfirmationModalComponent } from '../../../shared/components/confirmation-modal/confirmation-modal.component';
 import { CriticalConfirmationModalComponent } from '../../../shared/components/critical-confirmation-modal/critical-confirmation-modal.component';
 import { ActionLabelsI18n } from '../../../shared/constants/app.constants';
@@ -27,7 +28,7 @@ import { TaskWrapperService } from '../../../shared/services/task-wrapper.servic
 import { URLBuilderService } from '../../../shared/services/url-builder.service';
 import { RbdParentModel } from '../rbd-form/rbd-parent.model';
 import { RbdTrashMoveModalComponent } from '../rbd-trash-move-modal/rbd-trash-move-modal.component';
-import { RbdModel } from './rbd-model';
+import { RBDImageFormat, RbdModel } from './rbd-model';
 
 const BASE_URL = 'block/rbd';
 
@@ -40,7 +41,7 @@ const BASE_URL = 'block/rbd';
     { provide: URLBuilderService, useValue: new URLBuilderService(BASE_URL) }
   ]
 })
-export class RbdListComponent implements OnInit {
+export class RbdListComponent extends ListWithDetails implements OnInit {
   @ViewChild(TableComponent, { static: true })
   table: TableComponent;
   @ViewChild('usageTpl', { static: false })
@@ -90,9 +91,11 @@ export class RbdListComponent implements OnInit {
   private createRbdFromTask(pool: string, namespace: string, name: string): RbdModel {
     const model = new RbdModel();
     model.id = '-1';
+    model.unique_id = '-1';
     model.name = name;
     model.namespace = namespace;
     model.pool_name = pool;
+    model.image_format = RBDImageFormat.V2;
     return model;
   }
 
@@ -108,6 +111,7 @@ export class RbdListComponent implements OnInit {
     private urlBuilder: URLBuilderService,
     public actionLabels: ActionLabelsI18n
   ) {
+    super();
     this.permission = this.authStorageService.getPermissions().rbdImage;
     const getImageUri = () =>
       this.selection.first() &&
@@ -161,7 +165,11 @@ export class RbdListComponent implements OnInit {
       permission: 'delete',
       icon: Icons.trash,
       click: () => this.trashRbdModal(),
-      name: this.actionLabels.TRASH
+      name: this.actionLabels.TRASH,
+      disable: (selection: CdTableSelection) =>
+        !selection.first() ||
+        !selection.hasSingleSelection ||
+        selection.first().image_format === RBDImageFormat.V1
     };
     this.tableActions = [
       addAction,

@@ -16,6 +16,7 @@ import os
 import six
 
 from io import BytesIO
+from six import StringIO
 from teuthology import misc as teuthology
 from tasks.scrub import Scrubber
 from tasks.util.rados import cmd_erasure_code_profile
@@ -1239,8 +1240,8 @@ class ObjectStoreTool:
             self.pgid = self.manager.get_object_pg_with_shard(self.pool,
                                                               self.object_name,
                                                               self.osd)
-        self.remote = self.manager.ctx.\
-            cluster.only('osd.{o}'.format(o=self.osd)).remotes.keys()[0]
+        self.remote = next(iter(self.manager.ctx.\
+            cluster.only('osd.{o}'.format(o=self.osd)).remotes.keys()))
         path = self.manager.get_filepath().format(id=self.osd)
         self.paths = ("--data-path {path} --journal-path {path}/journal".
                       format(path=path))
@@ -1409,7 +1410,7 @@ class CephManager:
         if watch_channel is not None:
             args.append("--watch-channel")
             args.append(watch_channel)
-        return self.controller.run(args=args, wait=False, stdout=BytesIO(), stdin=run.PIPE)
+        return self.controller.run(args=args, wait=False, stdout=StringIO(), stdin=run.PIPE)
 
     def get_mon_socks(self):
         """
@@ -1592,7 +1593,7 @@ class CephManager:
 
     def osd_admin_socket(self, osd_id, command, check_status=True, timeout=0, stdout=None):
         if stdout is None:
-            stdout = BytesIO()
+            stdout = StringIO()
         return self.admin_socket('osd', osd_id, command, check_status, timeout, stdout)
 
     def find_remote(self, service_type, service_id):
@@ -1616,7 +1617,7 @@ class CephManager:
                         to the admin socket
         """
         if stdout is None:
-            stdout = BytesIO()
+            stdout = StringIO()
 
         remote = self.find_remote(service_type, service_id)
 
@@ -1745,7 +1746,7 @@ class CephManager:
         five seconds and try again.
         """
         if stdout is None:
-            stdout = BytesIO()
+            stdout = StringIO()
         tries = 0
         while True:
             proc = self.admin_socket(service_type, service_id,
@@ -1819,9 +1820,9 @@ class CephManager:
         """
         Get osd statuses sorted by states that the osds are in.
         """
-        osd_lines = filter(
+        osd_lines = list(filter(
             lambda x: x.startswith('osd.') and (("up" in x) or ("down" in x)),
-            self.raw_osd_status().split('\n'))
+            self.raw_osd_status().split('\n')))
         self.log(osd_lines)
         in_osds = [int(i[4:].split()[0])
                    for i in filter(lambda x: " in " in x, osd_lines)]
@@ -1965,7 +1966,7 @@ class CephManager:
         """
         with self.lock:
             if self.pools:
-                return random.choice(self.pools.keys())
+                return random.sample(self.pools.keys(), 1)[0]
 
     def get_pool_pg_num(self, pool_name):
         """
@@ -2466,6 +2467,36 @@ class CephManager:
         pgs = self.get_pg_stats()
         return self._get_num_active_down(pgs) == len(pgs)
 
+    def dump_pgs_not_active_clean(self):
+        """
+        Dumps all pgs that are not active+clean
+        """
+        pgs = self.get_pg_stats()
+        for pg in pgs:
+           if pg['state'] != 'active+clean':
+             self.log('PG %s is not active+clean' % pg['pgid'])
+             self.log(pg)
+
+    def dump_pgs_not_active_down(self):
+        """
+        Dumps all pgs that are not active or down
+        """
+        pgs = self.get_pg_stats()
+        for pg in pgs:
+           if 'active' not in pg['state'] and 'down' not in pg['state']:
+             self.log('PG %s is not active or down' % pg['pgid'])
+             self.log(pg)
+
+    def dump_pgs_not_active(self):
+        """
+        Dumps all pgs that are not active
+        """
+        pgs = self.get_pg_stats()
+        for pg in pgs:
+           if 'active' not in pg['state']:
+             self.log('PG %s is not active' % pg['pgid'])
+             self.log(pg)
+
     def wait_for_clean(self, timeout=1200):
         """
         Returns true when all pgs are clean.
@@ -2481,11 +2512,10 @@ class CephManager:
                 else:
                     self.log("no progress seen, keeping timeout for now")
                     if time.time() - start >= timeout:
-                        self.log('dumping pgs')
-                        out = self.raw_cluster_cmd('pg', 'dump')
-                        self.log(out)
+                        self.log('dumping pgs not clean')
+                        self.dump_pgs_not_active_clean()
                         assert time.time() - start < timeout, \
-                            'failed to become clean before timeout expired'
+                            'wait_for_clean: failed before timeout expired'
             cur_active_clean = self.get_num_active_clean()
             if cur_active_clean != num_active_clean:
                 start = time.time()
@@ -2567,11 +2597,10 @@ class CephManager:
                     if now - start >= timeout:
                         if self.is_recovered():
                             break
-                        self.log('dumping pgs')
-                        out = self.raw_cluster_cmd('pg', 'dump')
-                        self.log(out)
+                        self.log('dumping pgs not recovered yet')
+                        self.dump_pgs_not_active_clean()
                         assert now - start < timeout, \
-                            'failed to recover before timeout expired'
+                            'wait_for_recovery: failed before timeout expired'
             cur_active_recovered = self.get_num_active_recovered()
             if cur_active_recovered != num_active_recovered:
                 start = time.time()
@@ -2589,11 +2618,10 @@ class CephManager:
         while not self.is_active():
             if timeout is not None:
                 if time.time() - start >= timeout:
-                    self.log('dumping pgs')
-                    out = self.raw_cluster_cmd('pg', 'dump')
-                    self.log(out)
+                    self.log('dumping pgs not active')
+                    self.dump_pgs_not_active()
                     assert time.time() - start < timeout, \
-                        'failed to recover before timeout expired'
+                        'wait_for_active: failed before timeout expired'
             cur_active = self.get_num_active()
             if cur_active != num_active:
                 start = time.time()
@@ -2612,11 +2640,10 @@ class CephManager:
         while not self.is_active_or_down():
             if timeout is not None:
                 if time.time() - start >= timeout:
-                    self.log('dumping pgs')
-                    out = self.raw_cluster_cmd('pg', 'dump')
-                    self.log(out)
+                    self.log('dumping pgs not active or down')
+                    self.dump_pgs_not_active_down()
                     assert time.time() - start < timeout, \
-                        'failed to recover before timeout expired'
+                        'wait_for_active_or_down: failed before timeout expired'
             cur_active_down = self.get_num_active_down()
             if cur_active_down != num_active_down:
                 start = time.time()
@@ -2666,11 +2693,10 @@ class CephManager:
         while not self.is_active():
             if timeout is not None:
                 if time.time() - start >= timeout:
-                    self.log('dumping pgs')
-                    out = self.raw_cluster_cmd('pg', 'dump')
-                    self.log(out)
+                    self.log('dumping pgs not active')
+                    self.dump_pgs_not_active()
                     assert time.time() - start < timeout, \
-                        'failed to become active before timeout expired'
+                        'wait_till_active: failed before timeout expired'
             time.sleep(3)
         self.log("active!")
 

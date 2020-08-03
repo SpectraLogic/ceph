@@ -68,7 +68,7 @@ export class StartCaseBreadcrumbsResolver extends BreadcrumbsResolver {
   resolve(route: ActivatedRouteSnapshot) {
     const path = route.params.name;
     const text = _.startCase(path);
-    return [{ text: text, path: path }];
+    return [{ text: `${text}/Edit`, path: path }];
   }
 }
 
@@ -298,8 +298,7 @@ const routes: Routes = [
         path: 'login-change-password',
         component: LoginPasswordFormComponent,
         canActivate: [NoSsoGuardService]
-      },
-      { path: 'logout', children: [] }
+      }
     ]
   },
   {

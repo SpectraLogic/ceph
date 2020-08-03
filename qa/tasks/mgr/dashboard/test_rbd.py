@@ -5,7 +5,7 @@ from __future__ import absolute_import
 
 import time
 
-from .helper import DashboardTestCase, JObj, JLeaf, JList
+from tasks.mgr.dashboard.helper import DashboardTestCase, JObj, JLeaf, JList
 
 
 class RbdTest(DashboardTestCase):
@@ -236,6 +236,8 @@ class RbdTest(DashboardTestCase):
             'block_name_prefix': JLeaf(str),
             'name': JLeaf(str),
             'id': JLeaf(str),
+            'unique_id': JLeaf(str),
+            'image_format': JLeaf(int),
             'pool_name': JLeaf(str),
             'namespace': JLeaf(str, none=True),
             'features': JLeaf(int),

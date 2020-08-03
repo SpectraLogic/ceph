@@ -361,7 +361,9 @@ static int cls_rgw_gc_queue_remove_entries(cls_method_context_t hctx, bufferlist
   }
 
   //Update urgent data map
+  head.bl_urgent_data.clear();
   encode(urgent_data, head.bl_urgent_data);
+  CLS_LOG(5, "INFO: cls_rgw_gc_queue_remove_entries(): Urgent data size is %u\n", head.bl_urgent_data.length());
 
   return queue_write_head(hctx, head);
 }
@@ -424,7 +426,7 @@ static int cls_rgw_gc_queue_update_entry(cls_method_context_t hctx, bufferlist *
       } //end - catch
       auto xattr_iter = xattr_urgent_data_map.find(op.info.tag);
       if (xattr_iter != xattr_urgent_data_map.end()) {
-        it->second = op.info.time;
+        xattr_iter->second = op.info.time;
         tag_found = true;
         //write the updated map back
         bufferlist bl_map;

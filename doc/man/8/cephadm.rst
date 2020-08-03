@@ -37,7 +37,7 @@ Synopsis
 | **cephadm** **run** [-h] --name NAME --fsid FSID
 
 | **cephadm** **shell** [-h] [--fsid FSID] [--name NAME] [--config CONFIG]
-                        [--keyring KEYRING] [--env ENV]
+                        [--keyring KEYRING] [--mount MOUNT] [--env ENV]
                         [--] [command [command ...]]
 
 | **cephadm** **enter** [-h] [--fsid FSID] --name NAME [command [command ...]]
@@ -45,6 +45,8 @@ Synopsis
 | **cephadm** **ceph-volume** [-h] [--fsid FSID] [--config-json CONFIG_JSON]
                               [--config CONFIG] [--keyring KEYRING]
                               command [command ...]
+
+| **cephadm** **unit**  [-h] [--fsid FSID] --name NAME command
 
 | **cephadm** **logs** [-h] [--fsid FSID] --name NAME [command [command ...]]
 
@@ -59,12 +61,18 @@ Synopsis
 |                           [--initial-dashboard-user INITIAL_DASHBOARD_USER]
 |                           [--initial-dashboard-password INITIAL_DASHBOARD_PASSWORD]
 |                           [--dashboard-key DASHBOARD_KEY]
-|                           [--dashboard-crt DASHBOARD_CRT] [--skip-mon-network]
+|                           [--dashboard-crt DASHBOARD_CRT]
+|                           [--ssh-config SSH_CONFIG]
+|                           [--ssh-private-key SSH_PRIVATE_KEY]
+|                           [--ssh-public-key SSH_PUBLIC_KEY] 
+|                           [--ssh-user SSH_USER] [--skip-mon-network]
 |                           [--skip-dashboard] [--dashboard-password-noupdate]
 |                           [--no-minimize-config] [--skip-ping-check]
 |                           [--skip-pull] [--skip-firewalld] [--allow-overwrite]
 |                           [--allow-fqdn-hostname] [--skip-prepare-host]
 |                           [--orphan-initial-daemons] [--skip-monitoring-stack]
+|                           [--apply-spec APPLY_SPEC]
+
 
 
 | **cephadm** **deploy** [-h] --name NAME --fsid FSID [--config CONFIG]
@@ -196,6 +204,10 @@ Arguments:
 * [--initial-dashboard-password INITIAL_DASHBOARD_PASSWORD] Initial password for the initial dashboard user
 * [--dashboard-key DASHBOARD_KEY] Dashboard key
 * [--dashboard-crt DASHBOARD_CRT] Dashboard certificate
+* [--ssh-config SSH_CONFIG] SSH config
+* [--ssh-private-key SSH_PRIVATE_KEY] SSH private key
+* [--ssh-public-key SSH_PUBLIC_KEY] SSH public key
+* [--ssh-user SSH_USER]           set user for SSHing to cluster hosts, passwordless sudo will be needed for non-root users'
 * [--skip-mon-network]            set mon public_network based on bootstrap mon ip
 * [--skip-dashboard]              do not enable the Ceph Dashboard
 * [--dashboard-password-noupdate] stop forced dashboard password change
@@ -208,7 +220,7 @@ Arguments:
 * [--skip-prepare-host]           Do not prepare host
 * [--orphan-initial-daemons]      Do not create initial mon, mgr, and crash service specs
 * [--skip-monitoring-stack]       Do not automatically provision monitoring stack] (prometheus, grafana, alertmanager, node-exporter)
-
+* [--apply-spec APPLY_SPEC]       Apply cluster spec after bootstrap (copy ssh key, add hosts and apply services)
 
 ceph-volume
 -----------
@@ -410,6 +422,7 @@ Arguments:
 * [--name NAME, -n NAME]          daemon name (type.id)
 * [--config CONFIG, -c CONFIG]    ceph.conf to pass through to the container
 * [--keyring KEYRING, -k KEYRING] ceph.keyring to pass through to the container
+* [--mount MOUNT, -m MOUNT]       mount a file or directory under /mnt in the container
 * [--env ENV, -e ENV]             set environment variable
 
 

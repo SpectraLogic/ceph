@@ -3,6 +3,7 @@ import { I18n } from '@ngx-translate/i18n-polyfill';
 
 import { CephServiceService } from '../../../shared/api/ceph-service.service';
 import { OrchestratorService } from '../../../shared/api/orchestrator.service';
+import { ListWithDetails } from '../../../shared/classes/list-with-details.class';
 import { TableComponent } from '../../../shared/datatable/table/table.component';
 import { CellTemplate } from '../../../shared/enum/cell-template.enum';
 import { CdTableColumn } from '../../../shared/models/cd-table-column';
@@ -17,7 +18,7 @@ import { AuthStorageService } from '../../../shared/services/auth-storage.servic
   templateUrl: './services.component.html',
   styleUrls: ['./services.component.scss']
 })
-export class ServicesComponent implements OnChanges, OnInit {
+export class ServicesComponent extends ListWithDetails implements OnChanges, OnInit {
   @ViewChild(TableComponent, { static: false })
   table: TableComponent;
 
@@ -43,6 +44,7 @@ export class ServicesComponent implements OnChanges, OnInit {
     private orchService: OrchestratorService,
     private cephServiceService: CephServiceService
   ) {
+    super();
     this.permissions = this.authStorageService.getPermissions();
   }
 
@@ -70,7 +72,9 @@ export class ServicesComponent implements OnChanges, OnInit {
       {
         name: this.i18n('Running'),
         prop: 'status.running',
-        flexGrow: 1
+        flexGrow: 1,
+        cellClass: 'text-center',
+        cellTransformation: CellTemplate.checkIcon
       },
       {
         name: this.i18n('Size'),
@@ -98,10 +102,6 @@ export class ServicesComponent implements OnChanges, OnInit {
       this.services = [];
       this.table.reloadData();
     }
-  }
-
-  updateSelection(selection: CdTableSelection) {
-    this.selection = selection;
   }
 
   getServices(context: CdTableFetchDataContext) {

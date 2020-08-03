@@ -47,14 +47,14 @@ groups:
   - name: osd
     rules:
       - alert: 10% OSDs down
-        expr: (sum(ceph_osd_up) / count(ceph_osd_up)) * 100 <= 90
+        expr: count(ceph_osd_up == 0) / count(ceph_osd_up) * 100 >= 10
         labels:
           severity: critical
           type: ceph_default
           oid: 1.3.6.1.4.1.50495.15.1.2.4.1
         annotations:
           description: |
-            {{ $value | humanize}}% or {{with query "sum(ceph_osd_up)" }}{{ . | first | value }}{{ end }} of {{ with query "count(ceph_osd_up)"}}{{. | first | value }}{{ end }} OSDs are down (>=10%).
+            {{ $value | humanize }}% or {{ with query "count(ceph_osd_up == 0)" }}{{ . | first | value }}{{ end }} of {{ with query "count(ceph_osd_up)" }}{{ . | first | value }}{{ end }} OSDs are down (≥ 10%).
 
             The following OSDs are down:
             {{- range query "(ceph_osd_up * on(ceph_daemon) group_left(hostname) ceph_osd_metadata) == 0" }}
@@ -232,7 +232,7 @@ groups:
           (
             predict_linear(ceph_pool_stored[2d], 3600 * 24 * 5) >=
             ceph_pool_max_avail
-          ) * on(pool_id) group_right(name) ceph_pool_metadata
+          ) * on(pool_id) group_left(name) ceph_pool_metadata
         labels:
           severity: warning
           type: ceph_default

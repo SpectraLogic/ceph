@@ -9,6 +9,7 @@ import {
   FeatureTogglesMap$,
   FeatureTogglesService
 } from '../../../shared/services/feature-toggles.service';
+import { PrometheusAlertService } from '../../../shared/services/prometheus-alert.service';
 import { SummaryService } from '../../../shared/services/summary.service';
 
 @Component({
@@ -36,7 +37,8 @@ export class NavigationComponent implements OnInit, OnDestroy {
   constructor(
     private authStorageService: AuthStorageService,
     private summaryService: SummaryService,
-    private featureToggles: FeatureTogglesService
+    private featureToggles: FeatureTogglesService,
+    public prometheusAlertService: PrometheusAlertService
   ) {
     this.permissions = this.authStorageService.getPermissions();
     this.enabledFeature$ = this.featureToggles.get();
@@ -44,11 +46,8 @@ export class NavigationComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.subs.add(
-      this.summaryService.subscribe((data: any) => {
-        if (!data) {
-          return;
-        }
-        this.summaryData = data;
+      this.summaryService.subscribe((summary) => {
+        this.summaryData = summary;
       })
     );
     this.subs.add(

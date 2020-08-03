@@ -44,6 +44,8 @@ export class TelemetryComponent implements OnInit {
   ];
   report: object = undefined;
   reportId: number = undefined;
+  sendToUrl = '';
+  sendToDeviceUrl = '';
   step = 1;
 
   constructor(
@@ -64,9 +66,12 @@ export class TelemetryComponent implements OnInit {
     ];
     observableForkJoin(observables).subscribe(
       (resp: object) => {
-        this.moduleEnabled = resp[1]['enabled'];
+        const configResp = resp[1];
+        this.moduleEnabled = configResp['enabled'];
+        this.sendToUrl = configResp['url'];
+        this.sendToDeviceUrl = configResp['device_url'];
         this.options = _.pick(resp[0], this.requiredFields);
-        const configs = _.pick(resp[1], this.requiredFields);
+        const configs = _.pick(configResp, this.requiredFields);
         this.createConfigForm();
         this.configForm.setValue(configs);
         this.loading = false;
@@ -147,9 +152,11 @@ export class TelemetryComponent implements OnInit {
     this.mgrModuleService.updateConfig('telemetry', config).subscribe(
       () => {
         this.disableModule(
-          'Your settings have been applied successfully. ' +
-            'Due to privacy/legal reasons the Telemetry module is now disabled until you ' +
-            'complete the next step and accept the license.',
+          this.i18n(
+            `Your settings have been applied successfully. \
+Due to privacy/legal reasons the Telemetry module is now disabled until you \
+complete the next step and accept the license.`
+          ),
           () => {
             this.getReport();
           }
@@ -169,7 +176,7 @@ export class TelemetryComponent implements OnInit {
   disableModule(message: string = null, followUpFunc: Function = null) {
     this.telemetryService.enable(false).subscribe(() => {
       if (message) {
-        this.notificationService.show(NotificationType.success, this.i18n(message));
+        this.notificationService.show(NotificationType.success, message);
       }
       if (followUpFunc) {
         followUpFunc();

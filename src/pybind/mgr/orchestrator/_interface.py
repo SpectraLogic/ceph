@@ -4,20 +4,27 @@ ceph-mgr orchestrator interface
 
 Please see the ceph-mgr module developer's guide for more information.
 """
+
+import copy
+import datetime
+import errno
 import logging
 import pickle
+import re
 import time
-from collections import namedtuple
-from functools import wraps
 import uuid
-import datetime
-import copy
-import errno
+
+from collections import namedtuple, OrderedDict
+from contextlib import contextmanager
+from functools import wraps
+
+import yaml
 
 from ceph.deployment import inventory
 from ceph.deployment.service_spec import ServiceSpec, NFSServiceSpec, RGWSpec, \
     ServiceSpecValidationError, IscsiServiceSpec
 from ceph.deployment.drive_group import DriveGroupSpec
+from ceph.deployment.hostspec import HostSpec
 
 from mgr_module import MgrModule, CLICommand, HandleCommandResult
 
@@ -40,6 +47,10 @@ class OrchestratorError(Exception):
 
     It's not intended for programming errors or orchestrator internal errors.
     """
+    def __init__(self, msg, event_kind_subject: Optional[Tuple[str, str]]=None):
+        super(Exception, self).__init__(msg)
+        # See OrchestratorEvent.subject
+        self.event_subject = event_kind_subject
 
 
 class NoOrchestrator(OrchestratorError):
@@ -54,6 +65,16 @@ class OrchestratorValidationError(OrchestratorError):
     """
     Raised when an orchestrator doesn't support a specific feature.
     """
+
+
+@contextmanager
+def set_exception_subject(kind, subject, overwrite=False):
+    try:
+        yield
+    except OrchestratorError as e:
+        if overwrite or hasattr(e, 'event_subject'):
+            e.event_subject = (kind, subject)
+        raise
 
 
 def handle_exception(prefix, cmd_args, desc, perm, func):
@@ -852,24 +873,25 @@ class Orchestrator(object):
         """
         raise NotImplementedError()
 
-    def apply(self, specs: List[ServiceSpec]) -> Completion:
+    def apply(self, specs: List["GenericSpec"]) -> Completion:
         """
         Applies any spec
         """
-        fns: Dict[str, Callable[[ServiceSpec], Completion]] = {
+        fns: Dict[str, function] = {
             'alertmanager': self.apply_alertmanager,
             'crash': self.apply_crash,
             'grafana': self.apply_grafana,
-            'iscsi': cast(Callable[[ServiceSpec], Completion], self.apply_iscsi),
+            'iscsi': self.apply_iscsi,
             'mds': self.apply_mds,
             'mgr': self.apply_mgr,
             'mon': self.apply_mon,
-            'nfs': cast(Callable[[ServiceSpec], Completion], self.apply_nfs),
+            'nfs': self.apply_nfs,
             'node-exporter': self.apply_node_exporter,
-            'osd': cast(Callable[[ServiceSpec], Completion], lambda dg: self.apply_drivegroups([dg])),
+            'osd': lambda dg: self.apply_drivegroups([dg]),
             'prometheus': self.apply_prometheus,
             'rbd-mirror': self.apply_rbd_mirror,
-            'rgw': cast(Callable[[ServiceSpec], Completion], self.apply_rgw),
+            'rgw': self.apply_rgw,
+            'host': self.add_host,
         }
 
         def merge(ls, r):
@@ -879,10 +901,12 @@ class Orchestrator(object):
 
         spec, *specs = specs
 
-        completion = fns[spec.service_type](spec)
+        fn = cast(Callable[["GenericSpec"], Completion], fns[spec.service_type])
+        completion = fn(spec)
         for s in specs:
             def next(ls):
-                return fns[s.service_type](s).then(lambda r: merge(ls, r))
+                fn = cast(Callable[["GenericSpec"], Completion], fns[spec.service_type])
+                return fn(s).then(lambda r: merge(ls, r))
             completion = completion.then(next)
         return completion
 
@@ -946,11 +970,17 @@ class Orchestrator(object):
         """ Update OSD cluster """
         raise NotImplementedError()
 
-    def set_unmanaged_flag(self, service_name: str, unmanaged_flag: bool) -> HandleCommandResult:
+    def set_unmanaged_flag(self,
+                           unmanaged_flag: bool,
+                           service_type: str = 'osd',
+                           service_name=None
+                           ) -> HandleCommandResult:
         raise NotImplementedError()
 
-    def preview_drivegroups(self, drive_group_name: Optional[str] = 'osd',
-                            dg_specs: Optional[List[DriveGroupSpec]] = None) -> List[Dict[str, Dict[Any, Any]]]:
+    def preview_osdspecs(self,
+                         osdspec_name: Optional[str] = 'osd',
+                         osdspecs: Optional[List[DriveGroupSpec]] = None
+                         ) -> Completion:
         """ Get a preview for OSD deployments """
         raise NotImplementedError()
 
@@ -1150,53 +1180,14 @@ class Orchestrator(object):
         raise NotImplementedError()
 
 
-class HostSpec(object):
-    """
-    Information about hosts. Like e.g. ``kubectl get nodes``
-    """
-    def __init__(self,
-                 hostname,  # type: str
-                 addr=None,  # type: Optional[str]
-                 labels=None,  # type: Optional[List[str]]
-                 status=None,  # type: Optional[str]
-                 ):
-        #: the bare hostname on the host. Not the FQDN.
-        self.hostname = hostname  # type: str
+GenericSpec = Union[ServiceSpec, HostSpec]
 
-        #: DNS name or IP address to reach it
-        self.addr = addr or hostname  # type: str
-
-        #: label(s), if any
-        self.labels = labels or []  # type: List[str]
-
-        #: human readable status
-        self.status = status or ''  # type: str
-
-    def to_json(self):
-        return {
-            'hostname': self.hostname,
-            'addr': self.addr,
-            'labels': self.labels,
-            'status': self.status,
-        }
-
-    def __repr__(self):
-        args = [self.hostname]  # type: List[Any]
-        if self.addr is not None:
-            args.append(self.addr)
-        if self.labels:
-            args.append(self.labels)
-        if self.status:
-            args.append(self.status)
-
-        return "<HostSpec>({})".format(', '.join(map(repr, args)))
-
-    def __eq__(self, other):
-        # Let's omit `status` for the moment, as it is still the very same host.
-        return self.hostname == other.hostname and \
-               self.addr == other.addr and \
-               self.labels == other.labels
-
+def json_to_generic_spec(spec):
+    # type: (dict) -> GenericSpec
+    if 'service_type' in spec and spec['service_type'] == 'host':
+        return HostSpec.from_json(spec)
+    else:
+        return ServiceSpec.from_json(spec)
 
 class UpgradeStatusSpec(object):
     # Orchestrator's report on what's going on with any ongoing upgrade
@@ -1245,9 +1236,12 @@ class DaemonDescription(object):
                  created=None,
                  started=None,
                  last_configured=None,
-                 last_deployed=None):
+                 osdspec_affinity=None,
+                 last_deployed=None,
+                 events: Optional[List['OrchestratorEvent']]=None):
+
         # Host is at the same granularity as InventoryHost
-        self.hostname = hostname
+        self.hostname: str = hostname
 
         # Not everyone runs in containers, but enough people do to
         # justify having the container_id (runtime id) and container_image
@@ -1263,7 +1257,7 @@ class DaemonDescription(object):
         # typically either based on hostnames or on pod names.
         # This is the <foo> in mds.<foo>, the ID that will appear
         # in the FSMap/ServiceMap.
-        self.daemon_id = daemon_id
+        self.daemon_id: str = daemon_id
 
         # Service version that was deployed
         self.version = version
@@ -1282,6 +1276,11 @@ class DaemonDescription(object):
         self.last_configured = last_configured # type: Optional[datetime.datetime]
         self.last_deployed = last_deployed    # type: Optional[datetime.datetime]
 
+        # Affinity to a certain OSDSpec
+        self.osdspec_affinity = osdspec_affinity  # type: Optional[str]
+
+        self.events: List[OrchestratorEvent] = events or []
+
     def name(self):
         return '%s.%s' % (self.daemon_type, self.daemon_id)
 
@@ -1292,20 +1291,46 @@ class DaemonDescription(object):
         return False
 
     def service_id(self):
-        if self.daemon_type == 'rgw':
-            if self.hostname and self.hostname in self.daemon_id:
-                pre, post_ = self.daemon_id.split(self.hostname)
+        def _match():
+            err = OrchestratorError("DaemonDescription: Cannot calculate service_id: " \
+                    f"daemon_id='{self.daemon_id}' hostname='{self.hostname}'")
+
+            if not self.hostname:
+                # TODO: can a DaemonDescription exist without a hostname?
+                raise err
+
+            # use the bare hostname, not the FQDN.
+            host = self.hostname.split('.')[0]
+
+            if host == self.daemon_id:
+                # daemon_id == "host"
+                return self.daemon_id
+
+            elif host in self.daemon_id:
+                # daemon_id == "service_id.host"
+                # daemon_id == "service_id.host.random"
+                pre, post = self.daemon_id.rsplit(host, 1)
+                if not pre.endswith('.'):
+                    # '.' sep missing at front of host
+                    raise err
+                elif post and not post.startswith('.'):
+                    # '.' sep missing at end of host
+                    raise err
                 return pre[:-1]
-            else:
-                # daemon_id == "realm.zone.host.random"
+
+            # daemon_id == "service_id.random"
+            if self.daemon_type == 'rgw':
                 v = self.daemon_id.split('.')
-                if len(v) == 4:
+                if len(v) in [3, 4]:
                     return '.'.join(v[0:2])
-                # subcluster or fqdn? undecidable.
-                raise OrchestratorError(f"DaemonDescription: Cannot calculate service_id: {v}")
-        if self.daemon_type in ['mds', 'nfs', 'iscsi']:
-            return self.daemon_id.split('.')[0]
-        return self.daemon_type
+
+            # daemon_id == "service_id"
+            return self.daemon_id
+
+        if self.daemon_type in ['mds', 'nfs', 'iscsi', 'rgw']:
+            return _match()
+
+        return self.daemon_id
 
     def service_name(self):
         if self.daemon_type in ['rgw', 'mds', 'nfs', 'iscsi']:
@@ -1317,36 +1342,52 @@ class DaemonDescription(object):
                                                          id=self.daemon_id)
 
     def to_json(self):
-        out = {
-            'hostname': self.hostname,
-            'container_id': self.container_id,
-            'container_image_id': self.container_image_id,
-            'container_image_name': self.container_image_name,
-            'daemon_id': self.daemon_id,
-            'daemon_type': self.daemon_type,
-            'version': self.version,
-            'status': self.status,
-            'status_desc': self.status_desc,
-        }
+        out = OrderedDict()
+        out['daemon_type'] = self.daemon_type
+        out['daemon_id'] = self.daemon_id
+        out['hostname'] = self.hostname
+        out['container_id'] = self.container_id
+        out['container_image_id'] = self.container_image_id
+        out['container_image_name'] = self.container_image_name
+        out['version'] = self.version
+        out['status'] = self.status
+        out['status_desc'] = self.status_desc
+
         for k in ['last_refresh', 'created', 'started', 'last_deployed',
                   'last_configured']:
             if getattr(self, k):
                 out[k] = getattr(self, k).strftime(DATEFMT)
-        return {k: v for (k, v) in out.items() if v is not None}
+
+        if self.events:
+            out['events'] = [e.to_json() for e in self.events]
+
+        empty = [k for k, v in out.items() if v is None]
+        for e in empty:
+            del out[e]
+        return out
 
     @classmethod
     @handle_type_error
     def from_json(cls, data):
         c = data.copy()
+        event_strs = c.pop('events', [])
         for k in ['last_refresh', 'created', 'started', 'last_deployed',
                   'last_configured']:
             if k in c:
                 c[k] = datetime.datetime.strptime(c[k], DATEFMT)
-        return cls(**c)
+        events = [OrchestratorEvent.from_json(e) for e in event_strs]
+        return cls(events=events, **c)
 
     def __copy__(self):
         # feel free to change this:
         return DaemonDescription.from_json(self.to_json())
+
+    @staticmethod
+    def yaml_representer(dumper: 'yaml.SafeDumper', data: 'DaemonDescription'):
+        return dumper.represent_dict(data.to_json().items())
+
+
+yaml.add_representer(DaemonDescription, DaemonDescription.yaml_representer)
 
 class ServiceDescription(object):
     """
@@ -1370,7 +1411,8 @@ class ServiceDescription(object):
                  last_refresh=None,
                  created=None,
                  size=0,
-                 running=0):
+                 running=0,
+                 events: Optional[List['OrchestratorEvent']]=None):
         # Not everyone runs in containers, but enough people do to
         # justify having the container_image_id (image hash) and container_image
         # (image name)
@@ -1397,13 +1439,15 @@ class ServiceDescription(object):
 
         self.spec: ServiceSpec = spec
 
+        self.events: List[OrchestratorEvent] = events or []
+
     def service_type(self):
         return self.spec.service_type
 
     def __repr__(self):
         return f"<ServiceDescription of {self.spec.one_line_str()}>"
 
-    def to_json(self):
+    def to_json(self) -> OrderedDict:
         out = self.spec.to_json()
         status = {
             'container_image_id': self.container_image_id,
@@ -1413,13 +1457,15 @@ class ServiceDescription(object):
             'size': self.size,
             'running': self.running,
             'last_refresh': self.last_refresh,
-            'created': self.created
+            'created': self.created,
         }
         for k in ['last_refresh', 'created']:
             if getattr(self, k):
                 status[k] = getattr(self, k).strftime(DATEFMT)
         status = {k: v for (k, v) in status.items() if v is not None}
         out['status'] = status
+        if self.events:
+            out['events'] = [e.to_json() for e in self.events]
         return out
 
     @classmethod
@@ -1427,13 +1473,22 @@ class ServiceDescription(object):
     def from_json(cls, data: dict):
         c = data.copy()
         status = c.pop('status', {})
+        event_strs = c.pop('events', [])
         spec = ServiceSpec.from_json(c)
 
         c_status = status.copy()
         for k in ['last_refresh', 'created']:
             if k in c_status:
                 c_status[k] = datetime.datetime.strptime(c_status[k], DATEFMT)
-        return cls(spec=spec, **c_status)
+        events = [OrchestratorEvent.from_json(e) for e in event_strs]
+        return cls(spec=spec, events=events, **c_status)
+
+    @staticmethod
+    def yaml_representer(dumper: 'yaml.SafeDumper', data: 'DaemonDescription'):
+        return dumper.represent_dict(data.to_json().items())
+
+
+yaml.add_representer(ServiceDescription, ServiceDescription.yaml_representer)
 
 
 class InventoryFilter(object):
@@ -1532,6 +1587,60 @@ class DeviceLightLoc(namedtuple('DeviceLightLoc', ['host', 'dev', 'path'])):
        See ``ceph osd metadata | jq '.[].device_ids'``
     """
     __slots__ = ()
+
+
+class OrchestratorEvent:
+    """
+    Similar to K8s Events.
+
+    Some form of "important" log message attached to something.
+    """
+    INFO = 'INFO'
+    ERROR = 'ERROR'
+    regex_v1 = re.compile(r'^([^ ]+) ([^:]+):([^ ]+) \[([^\]]+)\] "(.*)"$')
+
+    def __init__(self, created: Union[str, datetime.datetime], kind, subject, level, message):
+        if isinstance(created, str):
+            created = datetime.datetime.strptime(created, DATEFMT)
+        self.created: datetime.datetime = created
+
+        assert kind in "service daemon".split()
+        self.kind: str = kind
+
+        # service name, or daemon danem or something
+        self.subject: str = subject
+
+        # Events are not meant for debugging. debugs should end in the log.
+        assert level in "INFO ERROR".split()
+        self.level = level
+
+        self.message: str = message
+
+    __slots__ = ('created', 'kind', 'subject', 'level', 'message')
+
+    def kind_subject(self) -> str:
+        return f'{self.kind}:{self.subject}'
+
+    def to_json(self) -> str:
+        # Make a long list of events readable.
+        created = self.created.strftime(DATEFMT)
+        return f'{created} {self.kind_subject()} [{self.level}] "{self.message}"'
+
+
+    @classmethod
+    @handle_type_error
+    def from_json(cls, data) -> "OrchestratorEvent":
+        """
+        >>> OrchestratorEvent.from_json('''2020-06-10T10:20:25.691255 daemon:crash.ubuntu [INFO] "Deployed crash.ubuntu on host 'ubuntu'"''').to_json()
+        '2020-06-10T10:20:25.691255 daemon:crash.ubuntu [INFO] "Deployed crash.ubuntu on host \\'ubuntu\\'"'
+
+        :param data:
+        :return:
+        """
+        match = cls.regex_v1.match(data)
+        if match:
+            return cls(*match.groups())
+        raise ValueError(f'Unable to match: "{data}"')
 
 
 def _mk_orch_methods(cls):
