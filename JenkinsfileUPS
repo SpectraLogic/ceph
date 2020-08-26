@@ -115,6 +115,12 @@ pipeline {
                     sh "sudo chmod 666 latest.txt"
                 }
                 sh "sudo rm -fr ${env.WWW_DIST_DIR}@tmp"
+
+                dir("${WWW_DIST_DIR}/latest") {
+                    sh "sudo rm -f build_info.txt"
+                    sh "sudo ln -s ${env.SPECTRA_INFO} build_info.txt"
+            	}
+                sh "sudo rm -fr ${env.WWW_DIST_DIR}/latest@tmp"
             }
         }
 
